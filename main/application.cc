@@ -382,7 +382,7 @@ void Application::Start() {
     });
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         if (device_state_ == kDeviceStateSpeaking) {
-            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+            audio_service_.PushPacketToDecodeQueue(std::move(packet), true);
         }
     });
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
@@ -410,6 +410,7 @@ void Application::Start() {
                     aborted_ = false;
                     if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
                         SetDeviceState(kDeviceStateSpeaking);
+                        DetectedAudioPlayIdle(0, 0);
                     }
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
@@ -432,11 +433,19 @@ void Application::Start() {
                 }
             }
         } else if (strcmp(type->valuestring, "stt") == 0) {
+            auto state = cJSON_GetObjectItem(root, "state");
             auto text = cJSON_GetObjectItem(root, "text");
-            if (cJSON_IsString(text)) {
+            if (strcmp(state->valuestring, "detected") == 0 && cJSON_IsString(text)) {
+                audio_service_.ResetAudioCountBytes();
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
                 Schedule([this, display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("user", message.c_str());
+                });
+            } else if (strcmp(state->valuestring, "abort") == 0) {
+                Schedule([this]() {
+                    if (device_state_ == kDeviceStateListening) {
+                        SetDeviceState(kDeviceStateIdle);
+                    }
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
@@ -580,6 +589,18 @@ void Application::MainEventLoop() {
     }
 }
 
+void Application::DetectedAudioPlayIdle(const int received_bytes, const int played_bytes) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "play");
+    cJSON_AddNumberToObject(root, "played", played_bytes);
+    cJSON_AddNumberToObject(root, "received", received_bytes);
+    cJSON_AddStringToObject(root, "state", STATE_STRINGS[device_state_]);
+    auto json_str = cJSON_PrintUnformatted(root);
+    protocol_->SendText(json_str); // WebSocket文本消息
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+}
+
 void Application::OnWakeWordDetected() {
     if (!protocol_) {
         return;
@@ -651,6 +672,7 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
+            display->SetChatMessage("system", "");
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
             break;

@@ -15,6 +15,9 @@
 #include "wake_words/custom_wake_word.h"
 #endif
 
+#include "application.h"
+#include "protocols/protocol.h"
+
 #define TAG "AudioService"
 
 
@@ -89,6 +92,7 @@ void AudioService::Initialize(AudioCodec* codec) {
         .skip_unhandled_events = true,
     };
     esp_timer_create(&audio_power_timer_args, &audio_power_timer_);
+    last_audio_recv_time_ = std::chrono::steady_clock::now();
 }
 
 void AudioService::Start() {
@@ -315,6 +319,7 @@ void AudioService::OpusCodecTask() {
         /* Decode the audio from decode queue */
         if (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) {
             auto packet = std::move(audio_decode_queue_.front());
+            played_byte_count_ += (packet->payload.size()); 
             audio_decode_queue_.pop_front();
             audio_queue_cv_.notify_all();
             lock.unlock();
@@ -374,6 +379,26 @@ void AudioService::OpusCodecTask() {
             debug_statistics_.encode_count++;
             lock.lock();
         }
+
+        /* Detect audio play over */
+        // 检查是否长时间没有新音频收到，且播放队列为空
+        auto now = std::chrono::steady_clock::now();
+        auto silence_duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_audio_recv_time_).count();
+        auto device_state = Application::GetInstance().GetDeviceState();
+
+        if (device_state == kDeviceStateSpeaking && audio_decode_queue_.empty() && (received_byte_count_ == 0 || played_byte_count_ == 0) && silence_duration > MAX_SPEAKING_TIMEOUT_MS) {
+            Application::GetInstance().AbortSpeaking(kAbortReasonNone);
+            continue;
+        }
+
+        if (device_state != kDeviceStateSpeaking || !audio_decode_queue_.empty() || received_byte_count_ == 0 || played_byte_count_ == 0) {
+            continue;
+        }
+
+        // 100ms无新数据且队列已空
+        if (silence_duration > 100) {
+            Application::GetInstance().DetectedAudioPlayIdle(received_byte_count_, played_byte_count_);
+        }
     }
 
     ESP_LOGW(TAG, "Opus codec task stopped");
@@ -426,6 +451,8 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
             return false;
         }
     }
+    received_byte_count_ += (packet->payload.size());
+    last_audio_recv_time_ = std::chrono::steady_clock::now();
     audio_decode_queue_.push_back(std::move(packet));
     audio_queue_cv_.notify_all();
     return true;
@@ -552,6 +579,8 @@ void AudioService::ResetDecoder() {
     opus_decoder_->ResetState();
     timestamp_queue_.clear();
     audio_decode_queue_.clear();
+    received_byte_count_ = 0;
+    played_byte_count_ = 0;
     audio_playback_queue_.clear();
     audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();

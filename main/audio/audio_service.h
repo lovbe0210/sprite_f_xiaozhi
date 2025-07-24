@@ -37,8 +37,9 @@
 #define OPUS_FRAME_DURATION_MS 60
 #define MAX_ENCODE_TASKS_IN_QUEUE 2
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 2
-#define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
-#define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+#define MAX_DECODE_PACKETS_IN_QUEUE (4800 / OPUS_FRAME_DURATION_MS)
+#define MAX_SEND_PACKETS_IN_QUEUE (4800 / OPUS_FRAME_DURATION_MS)
+#define MAX_SPEAKING_TIMEOUT_MS 10000
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
@@ -106,6 +107,11 @@ public:
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
+    void ResetAudioCountBytes() {
+        received_byte_count_ = 0;
+        played_byte_count_ = 0;
+        last_audio_recv_time_ = std::chrono::steady_clock::now();
+    }
 
 private:
     AudioCodec* codec_ = nullptr;
@@ -147,6 +153,11 @@ private:
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
     std::chrono::steady_clock::time_point last_output_time_;
+
+    // FOR detected audio playback
+    int received_byte_count_ = 0;
+    int played_byte_count_ = 0;
+    std::chrono::steady_clock::time_point last_audio_recv_time_;
 
     void AudioInputTask();
     void AudioOutputTask();
