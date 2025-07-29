@@ -381,12 +381,11 @@ void AudioService::OpusCodecTask() {
         }
 
         /* Detect audio play over */
-        // 检查是否长时间没有新音频收到，且播放队列为空
         auto now = std::chrono::steady_clock::now();
         auto silence_duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_audio_recv_time_).count();
         auto device_state = Application::GetInstance().GetDeviceState();
 
-        if (device_state == kDeviceStateSpeaking && audio_decode_queue_.empty() && (received_byte_count_ == 0 || played_byte_count_ == 0) && silence_duration > MAX_SPEAKING_TIMEOUT_MS) {
+        if (device_state == kDeviceStateSpeaking && audio_decode_queue_.empty() && received_byte_count_ == 0 && silence_duration > MAX_SPEAKING_TIMEOUT_MS) {
             Application::GetInstance().AbortSpeaking(kAbortReasonNone);
             continue;
         }
