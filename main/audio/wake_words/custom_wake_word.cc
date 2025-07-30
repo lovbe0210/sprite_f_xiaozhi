@@ -56,7 +56,24 @@ bool CustomWakeWord::Initialize(AudioCodec* codec) {
     multinet_model_data_ = multinet_->create(mn_name_, 3000);  // 3 秒超时
     multinet_->set_det_threshold(multinet_model_data_, CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f);
     esp_mn_commands_clear();
-    esp_mn_commands_add(1, CONFIG_CUSTOM_WAKE_WORD);
+
+    std::string wake_word_config = CONFIG_CUSTOM_WAKE_WORD;
+    std::stringstream ss(wake_word_config);
+    std::string word;
+    int id = 1;
+    while (std::getline(ss, word, ';')) {
+        size_t start = word.find_first_not_of(" \t\r\n");
+        size_t end = word.find_last_not_of(" \t\r\n");
+        if (start != std::string::npos && end != std::string::npos) {
+            word = word.substr(start, end - start + 1);
+            if (!word.empty()) {
+                esp_mn_commands_add(id++, word.c_str());
+                ESP_LOGI(TAG, "Added custom wake word: %s (id=%d)", word.c_str(), id-1);
+            }
+        }
+    }
+
+    // esp_mn_commands_add(1, CONFIG_CUSTOM_WAKE_WORD);
     esp_mn_commands_update();
     
     multinet_->print_active_speech_commands(multinet_model_data_);
