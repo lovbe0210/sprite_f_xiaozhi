@@ -324,8 +324,12 @@ void AudioService::OpusCodecTask() {
             break;
         }
 
+        if (Application::GetInstance().IsAborted()) {
+            audio_playback_queue_.clear();
+        }
+
         /* Decode the audio from decode queue */
-        if (!audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) {
+        if (!Application::GetInstance().IsAborted() && !audio_decode_queue_.empty() && audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE) {
             auto packet = std::move(audio_decode_queue_.front());
             played_byte_count_ += (packet->payload.size()); 
             audio_decode_queue_.pop_front();

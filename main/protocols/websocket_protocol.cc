@@ -110,7 +110,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
 
     websocket_->OnData([this](const char* data, size_t len, bool binary) {
         if (binary) {
-            if (on_incoming_audio_ != nullptr) {
+            if (on_incoming_audio_ != nullptr && !Application::GetInstance().IsAborted()) {
                 if (version_ == 2) {
                     BinaryProtocol2* bp2 = (BinaryProtocol2*)data;
                     bp2->version = ntohs(bp2->version);

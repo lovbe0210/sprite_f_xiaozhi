@@ -416,11 +416,11 @@ void Application::Start() {
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     if (device_state_ == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
-                            SetDeviceState(kDeviceStateIdle);
-                        } else {
+                        // if (listening_mode_ == kListeningModeManualStop) {
+                            // SetDeviceState(kDeviceStateIdle);
+                        // } else {
                             SetDeviceState(kDeviceStateListening);
-                        }
+                        // }
                     }
                 });
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {

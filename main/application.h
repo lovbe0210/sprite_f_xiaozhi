@@ -43,6 +43,7 @@ public:
     void Start();
     DeviceState GetDeviceState() const { return device_state_; }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+    bool IsAborted() const { return aborted_; }
     void Schedule(std::function<void()> callback);
     void SetDeviceState(DeviceState state);
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
