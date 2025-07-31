@@ -288,12 +288,13 @@ void Application::StartListening() {
                     return;
                 }
             }
-
+            ESP_LOGE(TAG, "start listening and found deviceState is Idle, listeningMode will be set to kListeningModeManualStop");
             SetListeningMode(kListeningModeManualStop);
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);
+            ESP_LOGE(TAG, "start listening and found deviceState is Speaking, listeningMode will be set to kListeningModeManualStop");
             SetListeningMode(kListeningModeManualStop);
         });
     }
@@ -416,11 +417,11 @@ void Application::Start() {
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     if (device_state_ == kDeviceStateSpeaking) {
-                        // if (listening_mode_ == kListeningModeManualStop) {
-                            // SetDeviceState(kDeviceStateIdle);
-                        // } else {
+                        if (listening_mode_ == kListeningModeManualStop) {
+                            SetDeviceState(kDeviceStateIdle);
+                        } else {
                             SetDeviceState(kDeviceStateListening);
-                        // }
+                        }
                     }
                 });
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
@@ -698,12 +699,8 @@ void Application::SetDeviceState(DeviceState state) {
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
-                // Only AFE wake word can be detected in speaking mode
-// #if CONFIG_USE_AFE_WAKE_WORD
+                // wake word should can be detected in speaking mode by any method
                 audio_service_.EnableWakeWordDetection(true);
-// #else
-                // audio_service_.EnableWakeWordDetection(false);
-// #endif
             }
             audio_service_.ResetDecoder();
             break;
