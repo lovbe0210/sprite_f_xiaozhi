@@ -256,11 +256,12 @@ void Application::ToggleChatState() {
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
+            listening_mode_ = kListeningModeManualStop;
             AbortSpeaking(kAbortReasonNone);
         });
     } else if (device_state_ == kDeviceStateListening) {
         Schedule([this]() {
-            protocol_->CloseAudioChannel();
+            StopListening();
         });
     }
 }
@@ -414,7 +415,7 @@ void Application::Start() {
                         DetectedAudioPlayIdle(0, 0);
                     }
                 });
-            } else if (strcmp(state->valuestring, "stop") == 0) {
+            } else if (strcmp(state->valuestring, "abort") == 0) {
                 Schedule([this]() {
                     if (device_state_ == kDeviceStateSpeaking) {
                         if (listening_mode_ == kListeningModeManualStop) {
@@ -450,10 +451,15 @@ void Application::Start() {
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
+            auto state = cJSON_GetObjectItem(root, "state");
             auto emotion = cJSON_GetObjectItem(root, "emotion");
             if (cJSON_IsString(emotion)) {
                 Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
                     display->SetEmotion(emotion_str.c_str());
+                });
+            } else if (strcmp(state->valuestring, "bye") == 0) { 
+                Schedule([this]() {
+                    listening_mode_ = kListeningModeManualStop;
                 });
             }
         } else if (strcmp(type->valuestring, "mcp") == 0) {
