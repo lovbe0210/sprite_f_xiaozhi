@@ -398,6 +398,7 @@ void AudioService::OpusCodecTask() {
         auto device_state = Application::GetInstance().GetDeviceState();
 
         if (device_state == kDeviceStateSpeaking && audio_decode_queue_.empty() && received_byte_count_ == 0 && silence_duration > MAX_SPEAKING_TIMEOUT_MS) {
+            ESP_LOGI(TAG, "receive speaker audio timeout, will stop speaking");
             Application::GetInstance().AbortSpeaking(kAbortReasonNone);
             continue;
         }
