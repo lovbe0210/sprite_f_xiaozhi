@@ -41,6 +41,7 @@ public:
     Application& operator=(const Application&) = delete;
 
     void Start();
+    void MainEventLoop();
     DeviceState GetDeviceState() const { return device_state_; }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     bool IsAborted() const { return aborted_; }
@@ -82,7 +83,6 @@ private:
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
 
-    void MainEventLoop();
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
     void ShowActivationCode(const std::string& code, const std::string& message);
