@@ -52,13 +52,13 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
     afe_config->agc_init = false;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 
-#ifdef CONFIG_USE_DEVICE_AEC
-    afe_config->aec_init = true;
-    afe_config->vad_init = false;
-#else
-    afe_config->aec_init = false;
-    afe_config->vad_init = true;
-#endif
+    #ifdef CONFIG_USE_DEVICE_AEC
+        afe_config->aec_init = true;
+        afe_config->vad_init = false;
+    #else
+        afe_config->aec_init = false;
+        afe_config->vad_init = true;
+    #endif
 
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_->create_from_config(afe_config);

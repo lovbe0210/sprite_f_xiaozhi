@@ -70,3 +70,11 @@ void AudioCodec::EnableOutput(bool enable) {
     output_enabled_ = enable;
     ESP_LOGI(TAG, "Set output enable to %s", enable ? "true" : "false");
 }
+
+void AudioCodec::EnableInputReference(bool enable) {
+    if (enable == input_reference_) {
+        return;
+    }
+    input_reference_ = enable;
+    ESP_LOGI(TAG, "Set input reference enable to %s", enable ? "true" : "false");
+}
