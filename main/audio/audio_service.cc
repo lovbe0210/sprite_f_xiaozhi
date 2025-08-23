@@ -47,21 +47,21 @@ void AudioService::Initialize(AudioCodec* codec) {
         reference_resampler_.Configure(codec->input_sample_rate(), 16000);
     }
 
-#if CONFIG_USE_AUDIO_PROCESSOR
-    audio_processor_ = std::make_unique<AfeAudioProcessor>();
-#else
-    audio_processor_ = std::make_unique<NoAudioProcessor>();
-#endif
+    #if CONFIG_USE_AUDIO_PROCESSOR
+        audio_processor_ = std::make_unique<AfeAudioProcessor>();
+    #else
+        audio_processor_ = std::make_unique<NoAudioProcessor>();
+    #endif
 
-#if CONFIG_USE_AFE_WAKE_WORD
-    wake_word_ = std::make_unique<AfeWakeWord>();
-#elif CONFIG_USE_ESP_WAKE_WORD
-    wake_word_ = std::make_unique<EspWakeWord>();
-#elif CONFIG_USE_CUSTOM_WAKE_WORD
-    wake_word_ = std::make_unique<CustomWakeWord>();
-#else
-    wake_word_ = nullptr;
-#endif
+    #if CONFIG_USE_AFE_WAKE_WORD
+        wake_word_ = std::make_unique<AfeWakeWord>();
+    #elif CONFIG_USE_ESP_WAKE_WORD
+        wake_word_ = std::make_unique<EspWakeWord>();
+    #elif CONFIG_USE_CUSTOM_WAKE_WORD
+        wake_word_ = std::make_unique<CustomWakeWord>();
+    #else
+        wake_word_ = nullptr;
+    #endif
 
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
@@ -102,35 +102,35 @@ void AudioService::Start() {
 
     esp_timer_start_periodic(audio_power_timer_, 1000000);
 
-#if CONFIG_USE_AUDIO_PROCESSOR
-    /* Start the audio input task */
-    xTaskCreatePinnedToCore([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioInputTask();
-        vTaskDelete(NULL);
-    }, "audio_input", 2048 * 3, this, 8, &audio_input_task_handle_, 1);
+    #if CONFIG_USE_AUDIO_PROCESSOR
+        /* Start the audio input task */
+        xTaskCreatePinnedToCore([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->AudioInputTask();
+            vTaskDelete(NULL);
+        }, "audio_input", 2048 * 3, this, 8, &audio_input_task_handle_, 1);
 
-    /* Start the audio output task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioOutputTask();
-        vTaskDelete(NULL);
-    }, "audio_output", 2048 * 2, this, 3, &audio_output_task_handle_);
-#else
-    /* Start the audio input task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioInputTask();
-        vTaskDelete(NULL);
-    }, "audio_input", 2048 * 2, this, 8, &audio_input_task_handle_);
+        /* Start the audio output task */
+        xTaskCreate([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->AudioOutputTask();
+            vTaskDelete(NULL);
+        }, "audio_output", 2048 * 2, this, 3, &audio_output_task_handle_);
+    #else
+        /* Start the audio input task */
+        xTaskCreate([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->AudioInputTask();
+            vTaskDelete(NULL);
+        }, "audio_input", 2048 * 2, this, 8, &audio_input_task_handle_);
 
-    /* Start the audio output task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioOutputTask();
-        vTaskDelete(NULL);
-    }, "audio_output", 2048, this, 3, &audio_output_task_handle_);
-#endif
+        /* Start the audio output task */
+        xTaskCreate([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->AudioOutputTask();
+            vTaskDelete(NULL);
+        }, "audio_output", 2048, this, 3, &audio_output_task_handle_);
+    #endif
 
     /* Start the opus codec task */
     xTaskCreate([](void* arg) {
@@ -199,13 +199,13 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     last_input_time_ = std::chrono::steady_clock::now();
     debug_statistics_.input_count++;
 
-#if CONFIG_USE_AUDIO_DEBUGGER
-    // 音频调试：发送原始音频数据
-    if (audio_debugger_ == nullptr) {
-        audio_debugger_ = std::make_unique<AudioDebugger>();
-    }
-    audio_debugger_->Feed(data);
-#endif
+    #if CONFIG_USE_AUDIO_DEBUGGER
+        // 音频调试：发送原始音频数据
+        if (audio_debugger_ == nullptr) {
+            audio_debugger_ = std::make_unique<AudioDebugger>();
+        }
+        audio_debugger_->Feed(data);
+    #endif
 
     return true;
 }
@@ -571,6 +571,12 @@ void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) {
 }
 
 void AudioService::PlaySound(const std::string_view& ogg) {
+    if (!codec_->output_enabled()) {
+        esp_timer_stop(audio_power_timer_);
+        esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+        codec_->EnableOutput(true);
+    }
+
     const uint8_t* buf = reinterpret_cast<const uint8_t*>(ogg.data());
     size_t size = ogg.size();
     size_t offset = 0;

@@ -680,6 +680,7 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetEmotion("neutral");
             display->SetChatMessage("system", "");
             audio_service_.EnableVoiceProcessing(false);
+            // SetAecMode(kAecOff);
             audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateConnecting:
@@ -690,6 +691,7 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
+            // SetAecMode(kAecOff);
 
             // Make sure the audio processor is running
             if (!audio_service_.IsAudioProcessorRunning()) {
@@ -705,6 +707,9 @@ void Application::SetDeviceState(DeviceState state) {
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
                 // wake word should can be detected in speaking mode by any method
+                #if CONFIG_USE_DEVICE_AEC
+                    SetAecMode(kAecOnDeviceSide);
+                #endif
                 audio_service_.EnableWakeWordDetection(true);
             }
             audio_service_.ResetDecoder();
@@ -767,6 +772,9 @@ void Application::SendMcpMessage(const std::string& payload) {
 }
 
 void Application::SetAecMode(AecMode mode) {
+    if (aec_mode_ == mode) {
+        return;
+    }
     aec_mode_ = mode;
     Schedule([this]() {
         auto& board = Board::GetInstance();
