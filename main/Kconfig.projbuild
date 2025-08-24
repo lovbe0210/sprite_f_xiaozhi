@@ -481,9 +481,23 @@ config CUSTOM_WAKE_WORD_THRESHOLD
         自定义唤醒词阈值，范围1-99，越小越敏感，默认10
 
 config USE_AUDIO_PROCESSOR
-    bool "Enable Audio Noise Reduction"
+    bool "Enable Audio AFE Processor"
     default y
     depends on (IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4) && SPIRAM
+    help
+        需要 ESP32 S3 与 PSRAM 支持
+
+config USE_AUDIO_NOISE_SUPPRESSION
+    bool "Enable Audio Noise Suppression"
+    default y
+    depends on USE_AUDIO_PROCESSOR && SPIRAM
+    help
+        需要 ESP32 S3 与 PSRAM 支持
+
+config USE_AUDIO_VAD_DETECTION
+    bool "Enable Audio VAD Detection"
+    default y
+    depends on USE_AUDIO_PROCESSOR && SPIRAM
     help
         需要 ESP32 S3 与 PSRAM 支持
 

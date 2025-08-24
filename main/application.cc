@@ -348,6 +348,7 @@ void Application::Start() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
     callbacks.on_vad_change = [this](bool speaking) {
+        ESP_LOGW(TAG, "VAD change: %s", speaking ? "speaking" : "silent");
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
     audio_service_.SetCallbacks(callbacks);
@@ -681,6 +682,7 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetChatMessage("system", "");
             audio_service_.EnableVoiceProcessing(false);
             // SetAecMode(kAecOff);
+            audio_service_.EnableAudioVadDetecting(false);
             audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateConnecting:
@@ -697,20 +699,23 @@ void Application::SetDeviceState(DeviceState state) {
             if (!audio_service_.IsAudioProcessorRunning()) {
                 // Send the start listening command
                 protocol_->SendStartListening(listening_mode_);
-                audio_service_.EnableVoiceProcessing(true);
                 audio_service_.EnableWakeWordDetection(false);
+                audio_service_.EnableAudioVadDetecting(false);
+                audio_service_.EnableVoiceProcessing(true);
             }
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
 
             if (listening_mode_ != kListeningModeRealtime) {
-                audio_service_.EnableVoiceProcessing(false);
                 // wake word should can be detected in speaking mode by any method
                 #if CONFIG_USE_DEVICE_AEC
                     SetAecMode(kAecOnDeviceSide);
                 #endif
-                audio_service_.EnableWakeWordDetection(true);
+                // 在说话时禁用唤醒词检测，通过VAD检测静音来打断说话，就和我们正常对话时一样，而非通过唤醒词打断
+                audio_service_.EnableVoiceProcessing(false);
+                audio_service_.EnableWakeWordDetection(false);
+                audio_service_.EnableAudioVadDetecting(true);
             }
             audio_service_.ResetDecoder();
             break;
