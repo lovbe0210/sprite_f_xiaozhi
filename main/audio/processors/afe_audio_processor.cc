@@ -17,7 +17,12 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
     // Pre-allocate output buffer capacity
     output_buffer_.reserve(frame_samples_);
 
-    int ref_num = codec_->input_reference() ? 1 : 0;
+    // 参考通道使用模拟缓冲音频    
+    #ifdef CONFIG_USE_DEVICE_AEC
+        int ref_num = 1;
+    #else
+        int ref_num = 0;
+    #endif
 
     std::string input_format;
     for (int i = 0; i < codec_->input_channels() - ref_num; i++) {
@@ -74,6 +79,12 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
     afe_config_print(afe_config);
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_->create_from_config(afe_config);
+
+    // 关闭AEC功能，只在speaking状态下开启
+    #ifdef CONFIG_USE_DEVICE_AEC
+        // afe_iface_->disable_aec(afe_data_);
+        codec_->EnableInputReference(false);
+    #endif
     
     xTaskCreate([](void* arg) {
         auto this_ = (AfeAudioProcessor*)arg;
@@ -181,15 +192,22 @@ void AfeAudioProcessor::AudioProcessorTask() {
 }
 
 void AfeAudioProcessor::EnableDeviceAec(bool enable) {
-    if (enable) {
-#if CONFIG_USE_DEVICE_AEC
-        afe_iface_->disable_vad(afe_data_);
-        afe_iface_->enable_aec(afe_data_);
-#else
+    #if CONFIG_USE_DEVICE_AEC
+        if (enable) {
+            afe_iface_->enable_aec(afe_data_);
+        } else {
+            afe_iface_->disable_aec(afe_data_);
+        }
+        codec_->EnableInputReference(enable);
+    #else
         ESP_LOGE(TAG, "Device AEC is not supported");
-#endif
-    } else {
-        afe_iface_->disable_aec(afe_data_);
+    #endif
+}
+
+void AfeAudioProcessor::EnableAudioVadDetecting(bool enable) {
+    if (enable) {
         afe_iface_->enable_vad(afe_data_);
+    } else {
+        afe_iface_->disable_vad(afe_data_);
     }
 }

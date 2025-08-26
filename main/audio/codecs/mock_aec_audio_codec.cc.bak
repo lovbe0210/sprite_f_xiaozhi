@@ -8,7 +8,7 @@
 
 MockAecAudioCodec::MockAecAudioCodec(int input_sample_rate, int output_sample_rate,
     gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout, gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din) {
-    input_channels_ = input_channels_ + 1; // 输入通道数模拟一路参考音频
+    input_channels_ = 1 + 1; // 输入通道数模拟一路参考音频
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
     ref_buffer_.resize(960 * 2); // 可根据帧长调整
@@ -145,15 +145,16 @@ int MockAecAudioCodec::Write(const int16_t* data, int samples) {
 }
 
 int MockAecAudioCodec::Read(int16_t* dest, int samples) {
+    ESP_LOGI(TAG, "Start Read %d samples", samples);
     // 统一计算需要读取的数据大小
     int size = samples / input_channels_;
-    int mic_channels = input_channels_ - 1;
-    int mic_samples = size * mic_channels;
-    
+    int channels = input_channels_ - input_reference_;
+    int mic_samples = input_reference_ ? size * channels : samples;
+
     // 统一读取音频数据
     size_t bytes_read;
     std::vector<int32_t> bit32_buffer(mic_samples);
-    
+
     if (i2s_channel_read(rx_handle_, bit32_buffer.data(), bit32_buffer.size() * sizeof(int32_t), &bytes_read, portMAX_DELAY) != ESP_OK) {
         ESP_LOGE(TAG, "Read Failed!");
         return 0;
@@ -166,34 +167,38 @@ int MockAecAudioCodec::Read(int16_t* dest, int samples) {
         int32_t value = bit32_buffer[i] >> 12;
         data[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
     }
-    
-    // 有参考输入情况，合并麦克风数据和参考数据
-    int j = 0;
-    int i = 0;
+    ESP_LOGI(TAG, "Final Read mic_samples=%d, data.size()=%d, samples=%d, channels=%d, input_reference_=%d, ref_buffer_.size()=%zu, read_pos_=%d, write_pos_=%d", mic_samples, (int)data.size(), samples, channels, input_reference_, ref_buffer_.size(), read_pos_, write_pos_);
+    // 合成输出
+    int i = 0, j = 0;
     std::lock_guard<std::mutex> lock(data_if_mutex_);
-    while (i < samples) {
-        // mic data 
-        if (mic_channels > 1) {
-            for (int k = 0; k < mic_channels; k++) {
+    for (; i < samples;) {
+        // mic data
+        for (int p = 0; p < channels && i < samples; p++) {
+            if (j < (int)data.size()) {
                 dest[i++] = data[j++];
+            } else {
+                dest[i++] = 0;
             }
-        } else if (mic_channels == 1){
-            dest[i++] = data[j++];
-        } else{
-            ESP_LOGE(TAG, "no channel can be read!");
         }
-      
         // ref data
-        if (input_reference_) {
-            dest[i++] = read_pos_ < write_pos_ ? ref_buffer_[read_pos_++] : 0;       
-        } else {
+        if (input_reference_ && i < samples) {
+            if (read_pos_ < write_pos_ && read_pos_ < (int)ref_buffer_.size()) {
+                dest[i++] = ref_buffer_[read_pos_++];
+            } else {
+                dest[i++] = 0;
+            }
+        } else if (i < samples) {
             dest[i++] = 0;
         }
     }
-
+    // 检查ref_buffer_指针合法性
+    if (read_pos_ > write_pos_ || write_pos_ > (int)ref_buffer_.size()) {
+        ESP_LOGE(TAG, "ref_buffer_ pointer out of range! read_pos_=%d, write_pos_=%d, ref_buffer_.size()=%zu", read_pos_, write_pos_, ref_buffer_.size());
+        read_pos_ = write_pos_ = 0;
+    }
     if (read_pos_ == write_pos_) {
         read_pos_ = write_pos_ = 0;
     }
-    
+
     return samples;
 }

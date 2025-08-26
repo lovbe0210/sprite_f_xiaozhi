@@ -13,8 +13,7 @@ protected:
 public:
     MockAecAudioCodec(int input_sample_rate, int output_sample_rate,
     gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout,
-    gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din,
-    bool input_reference = false);
+    gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din);
     ~MockAecAudioCodec();
 
     

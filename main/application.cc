@@ -36,15 +36,15 @@ static const char* const STATE_STRINGS[] = {
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
-#if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
-#error "CONFIG_USE_DEVICE_AEC and CONFIG_USE_SERVER_AEC cannot be enabled at the same time"
-#elif CONFIG_USE_DEVICE_AEC
-    aec_mode_ = kAecOnDeviceSide;
-#elif CONFIG_USE_SERVER_AEC
-    aec_mode_ = kAecOnServerSide;
-#else
-    aec_mode_ = kAecOff;
-#endif
+    #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
+    #error "CONFIG_USE_DEVICE_AEC and CONFIG_USE_SERVER_AEC cannot be enabled at the same time"
+    #elif CONFIG_USE_DEVICE_AEC
+        aec_mode_ = kAecOnDeviceSide;
+    #elif CONFIG_USE_SERVER_AEC
+        aec_mode_ = kAecOnServerSide;
+    #else
+        aec_mode_ = kAecOff;
+    #endif
 
     esp_timer_create_args_t clock_timer_args = {
         .callback = [](void* arg) {
@@ -254,7 +254,7 @@ void Application::ToggleChatState() {
                 }
             }
 
-            SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+            SetListeningMode(kListeningModeAutoStop);
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
@@ -291,8 +291,8 @@ void Application::StartListening() {
                     return;
                 }
             }
-            ESP_LOGE(TAG, "start listening and found deviceState is Idle, listeningMode will be set to kListeningModeManualStop");
-            SetListeningMode(kListeningModeManualStop);
+            ESP_LOGE(TAG, "start listening and found deviceState is Idle, listeningMode will be set to kListeningModeAutoStop");
+            SetListeningMode(kListeningModeAutoStop);
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
@@ -626,19 +626,19 @@ void Application::OnWakeWordDetected() {
 
         auto wake_word = audio_service_.GetLastWakeWord();
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
-#if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
-        // Encode and send the wake word data to the server
-        while (auto packet = audio_service_.PopWakeWordPacket()) {
-            protocol_->SendAudio(std::move(packet));
-        }
-        // Set the chat state to wake word detected
-        protocol_->SendWakeWordDetected(wake_word);
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-#else
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-        // Play the pop up sound to indicate the wake word is detected
-        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
-#endif
+        #if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
+            // Encode and send the wake word data to the server
+            while (auto packet = audio_service_.PopWakeWordPacket()) {
+                protocol_->SendAudio(std::move(packet));
+            }
+            // Set the chat state to wake word detected
+            protocol_->SendWakeWordDetected(wake_word);
+            SetListeningMode(kListeningModeAutoStop);
+        #else
+            SetListeningMode(kListeningModeAutoStop);
+            // Play the pop up sound to indicate the wake word is detected
+            audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+        #endif
     } else if (device_state_ == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (device_state_ == kDeviceStateActivating) {
@@ -681,7 +681,6 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetEmotion("neutral");
             display->SetChatMessage("system", "");
             audio_service_.EnableVoiceProcessing(false);
-            // SetAecMode(kAecOff);
             audio_service_.EnableAudioVadDetecting(false);
             audio_service_.EnableWakeWordDetection(true);
             break;
@@ -693,7 +692,6 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
-            // SetAecMode(kAecOff);
 
             // Make sure the audio processor is running
             if (!audio_service_.IsAudioProcessorRunning()) {
@@ -709,9 +707,6 @@ void Application::SetDeviceState(DeviceState state) {
 
             if (listening_mode_ != kListeningModeRealtime) {
                 // wake word should can be detected in speaking mode by any method
-                #if CONFIG_USE_DEVICE_AEC
-                    SetAecMode(kAecOnDeviceSide);
-                #endif
                 // 在说话时禁用唤醒词检测，通过VAD检测静音来打断说话，就和我们正常对话时一样，而非通过唤醒词打断
                 audio_service_.EnableVoiceProcessing(false);
                 audio_service_.EnableWakeWordDetection(false);

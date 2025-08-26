@@ -76,5 +76,6 @@ void AudioCodec::EnableInputReference(bool enable) {
         return;
     }
     input_reference_ = enable;
+    // TODO 检查这个方法是否正确执行
     ESP_LOGI(TAG, "Set input reference enable to %s", enable ? "true" : "false");
 }

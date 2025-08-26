@@ -163,6 +163,7 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
         codec_->EnableInput(true);
     }
 
+    // normal for client, input sample_rate is 16000, server need 16000 too, so input_sample_rate == sample_rate
     if (codec_->input_sample_rate() != sample_rate) {
         data.resize(samples * codec_->input_sample_rate() / sample_rate * codec_->input_channels());
         if (!codec_->InputData(data)) {
@@ -447,6 +448,15 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
 }
 
 void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm) {
+    EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
+                AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING | AS_EVENT_AUDIO_VAD_RUNNING,
+                pdFALSE, pdFALSE, portMAX_DELAY);
+    if (bits & AS_EVENT_AUDIO_VAD_RUNNING) {
+        // free audio data if only VAD is enabled without other processors
+        pcm.clear();
+        return;
+    }
+    
     auto task = std::make_unique<AudioTask>();
     task->type = type;
     task->pcm = std::move(pcm);
@@ -557,13 +567,13 @@ void AudioService::EnableVoiceProcessing(bool enable) {
 
 void AudioService::EnableAudioVadDetecting(bool enable) { 
     ESP_LOGI(TAG, "%s audio VAD detecting", enable ? "Enabling" : "Disabling");
+    if (!audio_processor_initialized_) {
+        audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS);
+        audio_processor_initialized_ = true;
+    }
+    audio_processor_->EnableAudioVadDetecting(enable);
     if (enable) {
-        if (!audio_processor_initialized_) {
-            audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS);
-            audio_processor_initialized_ = true;
-        }
-
-        /* this vad is only used for abort speaking */
+        /* We should make sure no audio is playing */
         ResetDecoder();
         audio_input_need_warmup_ = true;
         audio_processor_->Start();
