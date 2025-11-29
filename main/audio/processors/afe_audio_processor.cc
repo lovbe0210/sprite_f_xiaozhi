@@ -10,7 +10,7 @@ AfeAudioProcessor::AfeAudioProcessor()
     event_group_ = xEventGroupCreate();
 }
 
-void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
+void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srmodel_list_t* models_list) {
     codec_ = codec;
     frame_samples_ = frame_duration_ms * 16000 / 1000;
 
@@ -31,7 +31,13 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms) {
     for (int i = 0; i < ref_num; i++) {
         input_format.push_back('R');
     }
-    srmodel_list_t *models = esp_srmodel_init("model");
+    srmodel_list_t *models;
+    if (models_list == nullptr) {
+        models = esp_srmodel_init("model");
+    } else {
+        models = models_list;
+    }
+
     afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
 
     // 噪音抑制

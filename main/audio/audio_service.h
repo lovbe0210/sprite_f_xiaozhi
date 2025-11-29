@@ -11,6 +11,7 @@
 #include <freertos/task.h>
 #include <freertos/event_groups.h>
 #include <esp_timer.h>
+#include <model_path.h>
 
 #include <opus_encoder.h>
 #include <opus_decoder.h>
@@ -95,6 +96,7 @@ public:
     bool IsIdle();
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
     bool IsAudioProcessorRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
+    bool IsAfeWakeWord();
 
     void EnableWakeWordDetection(bool enable);
     void EnableVoiceProcessing(bool enable);
@@ -114,6 +116,7 @@ public:
         played_byte_count_ = 0;
         last_audio_recv_time_ = std::chrono::steady_clock::now();
     }
+    void SetModelsList(srmodel_list_t* models_list);
 
 private:
     AudioCodec* codec_ = nullptr;
@@ -127,6 +130,7 @@ private:
     OpusResampler reference_resampler_;
     OpusResampler output_resampler_;
     DebugStatistics debug_statistics_;
+    srmodel_list_t* models_list_ = nullptr;
 
     EventGroupHandle_t event_group_;
 
