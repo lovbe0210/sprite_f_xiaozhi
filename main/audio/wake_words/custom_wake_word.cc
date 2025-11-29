@@ -91,10 +91,10 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
     if (models_list == nullptr) {
         language_ = "cn";
         models_ = esp_srmodel_init("model");
-#ifdef CONFIG_CUSTOM_WAKE_WORD
-        threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;
-        commands_.push_back({CONFIG_CUSTOM_WAKE_WORD, CONFIG_CUSTOM_WAKE_WORD_DISPLAY, "wake"});
-#endif
+        #ifdef CONFIG_CUSTOM_WAKE_WORD
+            threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;
+            commands_.push_back({CONFIG_CUSTOM_WAKE_WORD, CONFIG_CUSTOM_WAKE_WORD_DISPLAY, "wake"});
+        #endif
     } else {
         models_ = models_list;
         ParseWakenetModelConfig();
@@ -116,7 +116,7 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
         ESP_LOGI(TAG, "Please refer to https://pcn7cs20v8cr.feishu.cn/wiki/CpQjwQsCJiQSWSkYEvrcxcbVnwh to add custom wake word");
         return false;
     }
-
+    ESP_LOGI(TAG, "multinet: %s", mn_name_);
     multinet_ = esp_mn_handle_from_name(mn_name_);
     multinet_model_data_ = multinet_->create(mn_name_, duration_);
     multinet_->set_det_threshold(multinet_model_data_, threshold_);

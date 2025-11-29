@@ -101,27 +101,27 @@ void AudioService::Start() {
             vTaskDelete(NULL);
         }, "audio_input", 2048 * 3, this, 8, &audio_input_task_handle_, 0);
 
-    /* Start the audio output task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioOutputTask();
-        vTaskDelete(NULL);
-    }, "audio_output", 2048 * 2, this, 4, &audio_output_task_handle_);
-#else
-    /* Start the audio input task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioInputTask();
-        vTaskDelete(NULL);
-    }, "audio_input", 2048 * 2, this, 8, &audio_input_task_handle_);
+        /* Start the audio output task */
+        xTaskCreate([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->AudioOutputTask();
+            vTaskDelete(NULL);
+        }, "audio_output", 2048 * 2, this, 4, &audio_output_task_handle_);
+    #else
+        /* Start the audio input task */
+        xTaskCreate([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->AudioInputTask();
+            vTaskDelete(NULL);
+        }, "audio_input", 2048 * 2, this, 8, &audio_input_task_handle_);
 
-    /* Start the audio output task */
-    xTaskCreate([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->AudioOutputTask();
-        vTaskDelete(NULL);
-    }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
-#endif
+        /* Start the audio output task */
+        xTaskCreate([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->AudioOutputTask();
+            vTaskDelete(NULL);
+        }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
+    #endif
 
     /* Start the opus codec task */
     xTaskCreate([](void* arg) {
@@ -559,7 +559,7 @@ void AudioService::EnableVoiceProcessing(bool enable) {
 void AudioService::EnableAudioVadDetecting(bool enable) { 
     ESP_LOGI(TAG, "%s audio VAD detecting", enable ? "Enabling" : "Disabling");
     if (!audio_processor_initialized_) {
-        audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS);
+        audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_);
         audio_processor_initialized_ = true;
     }
     audio_processor_->EnableAudioVadDetecting(enable);
@@ -736,21 +736,21 @@ void AudioService::CheckAndUpdateAudioPowerState() {
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
     models_list_ = models_list;
 
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
-    if (esp_srmodel_filter(models_list_, ESP_MN_PREFIX, NULL) != nullptr) {
-        wake_word_ = std::make_unique<CustomWakeWord>();
-    } else if (esp_srmodel_filter(models_list_, ESP_WN_PREFIX, NULL) != nullptr) {
-        wake_word_ = std::make_unique<AfeWakeWord>();
-    } else {
-        wake_word_ = nullptr;
-    }
-#else
-    if (esp_srmodel_filter(models_list_, ESP_WN_PREFIX, NULL) != nullptr) {
-        wake_word_ = std::make_unique<EspWakeWord>();
-    } else {
-        wake_word_ = nullptr;
-    }
-#endif
+    #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+        if (esp_srmodel_filter(models_list_, ESP_MN_PREFIX, NULL) != nullptr) {
+            wake_word_ = std::make_unique<CustomWakeWord>();
+        } else if (esp_srmodel_filter(models_list_, ESP_WN_PREFIX, NULL) != nullptr) {
+            wake_word_ = std::make_unique<AfeWakeWord>();
+        } else {
+            wake_word_ = nullptr;
+        }
+    #else
+        if (esp_srmodel_filter(models_list_, ESP_WN_PREFIX, NULL) != nullptr) {
+            wake_word_ = std::make_unique<EspWakeWord>();
+        } else {
+            wake_word_ = nullptr;
+        }
+    #endif
 
     if (wake_word_) {
         wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
@@ -762,9 +762,9 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
 }
 
 bool AudioService::IsAfeWakeWord() {
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
-    return wake_word_ != nullptr && dynamic_cast<AfeWakeWord*>(wake_word_.get()) != nullptr;
-#else
-    return false;
-#endif
+    #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
+        return wake_word_ != nullptr && dynamic_cast<AfeWakeWord*>(wake_word_.get()) != nullptr;
+    #else
+        return false;
+    #endif
 }

@@ -665,6 +665,7 @@ void Application::OnWakeWordDetected() {
 
         auto wake_word = audio_service_.GetLastWakeWord();
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        // TODO 这里出现了两个不同的实现分支，更新完代码后进行处理
         #if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
             // Encode and send the wake word data to the server
             while (auto packet = audio_service_.PopWakeWordPacket()) {
