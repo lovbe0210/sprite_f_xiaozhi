@@ -96,7 +96,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
         auto this_ = (AfeAudioProcessor*)arg;
         this_->AudioProcessorTask();
         vTaskDelete(NULL);
-    }, "audio_communication", 4096, this, 3, NULL);
+    }, "audio_communication", 4096, this, 4, NULL);
 }
 
 AfeAudioProcessor::~AfeAudioProcessor() {
@@ -179,9 +179,10 @@ void AfeAudioProcessor::AudioProcessorTask() {
             
             // Add data to buffer
             output_buffer_.insert(output_buffer_.end(), res->data, res->data + samples);
-            
+
             // Output complete frames when buffer has enough data
             while (output_buffer_.size() >= frame_samples_) {
+                // ESP_LOGE(TAG, "999999999999-Output size: %d, %d, %d", samples, frame_samples_, output_buffer_.size());
                 if (output_buffer_.size() == frame_samples_) {
                     // If buffer size equals frame size, move the entire buffer
                     output_callback_(std::move(output_buffer_));
@@ -193,7 +194,7 @@ void AfeAudioProcessor::AudioProcessorTask() {
                     output_buffer_.erase(output_buffer_.begin(), output_buffer_.begin() + frame_samples_);
                 }
             }
-        }
+        } 
     }
 }
 

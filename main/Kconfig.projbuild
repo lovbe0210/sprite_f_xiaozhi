@@ -655,20 +655,6 @@ config USE_AUDIO_VAD_DETECTION
     help
         需要 ESP32 S3 与 PSRAM 支持
 
-config USE_AUDIO_NOISE_SUPPRESSION
-    bool "Enable Audio Noise Suppression"
-    default y
-    depends on USE_AUDIO_PROCESSOR && SPIRAM
-    help
-        需要 ESP32 S3 与 PSRAM 支持
-
-config USE_AUDIO_VAD_DETECTION
-    bool "Enable Audio VAD Detection"
-    default y
-    depends on USE_AUDIO_PROCESSOR && SPIRAM
-    help
-        需要 ESP32 S3 与 PSRAM 支持
-
 config USE_DEVICE_AEC
     bool "Enable Device-Side AEC"
     default n

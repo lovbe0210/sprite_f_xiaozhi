@@ -86,14 +86,12 @@ void CustomWakeWord::ParseWakenetModelConfig() {
 
 bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     codec_ = codec;
-    commands_.clear();
 
     if (models_list == nullptr) {
         language_ = "cn";
         models_ = esp_srmodel_init("model");
         #ifdef CONFIG_CUSTOM_WAKE_WORD
             threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;
-            commands_.push_back({CONFIG_CUSTOM_WAKE_WORD, CONFIG_CUSTOM_WAKE_WORD_DISPLAY, "wake"});
         #endif
     } else {
         models_ = models_list;
@@ -121,25 +119,22 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
     multinet_model_data_ = multinet_->create(mn_name_, duration_);
     multinet_->set_det_threshold(multinet_model_data_, threshold_);
     esp_mn_commands_clear();
-    for (int i = 0; i < commands_.size(); i++) {
-        esp_mn_commands_add(i + 1, commands_[i].command.c_str());
-    }
 
-    // std::string wake_word_config = CONFIG_CUSTOM_WAKE_WORD;
-    // std::stringstream ss(wake_word_config);
-    // std::string word;
-    // int id = 1;
-    // while (std::getline(ss, word, ';')) {
-    //     size_t start = word.find_first_not_of(" \t\r\n");
-    //     size_t end = word.find_last_not_of(" \t\r\n");
-    //     if (start != std::string::npos && end != std::string::npos) {
-    //         word = word.substr(start, end - start + 1);
-    //         if (!word.empty()) {
-    //             esp_mn_commands_add(id++, word.c_str());
-    //             ESP_LOGI(TAG, "Added custom wake word: %s (id=%d)", word.c_str(), id-1);
-    //         }
-    //     }
-    // }
+    std::string custom_wake_words = CONFIG_CUSTOM_WAKE_WORD;
+    std::stringstream wake_words_stream(custom_wake_words);
+    std::string wake_word;
+    int id = 1;
+    while (std::getline(wake_words_stream, wake_word, ';')) {
+        size_t start = wake_word.find_first_not_of(" \t\r\n");
+        size_t end = wake_word.find_last_not_of(" \t\r\n");
+        if (start != std::string::npos && end != std::string::npos) {
+            wake_word = wake_word.substr(start, end - start + 1);
+            if (!wake_word.empty()) {
+                esp_mn_commands_add(id++, wake_word.c_str());
+                ESP_LOGI(TAG, "Added custom wake word: %s (id=%d)", wake_word.c_str(), id-1);
+            }
+        }
+    }
 
     esp_mn_commands_update();
     
@@ -186,15 +181,15 @@ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
         for (int i = 0; i < mn_result->num && running_; i++) {
             ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
                     mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
-            auto& command = commands_[mn_result->command_id[i] - 1];
-            if (command.action == "wake") {
-                last_detected_wake_word_ = command.text;
+            // auto& command = commands_[mn_result->command_id[i] - 1];
+            // if (command.action == "wake") {
+                last_detected_wake_word_ = mn_result->string;
                 running_ = false;
-                
                 if (wake_word_detected_callback_) {
+                    ESP_LOGI(TAG, "Wake word detected: %s", last_detected_wake_word_.c_str());
                     wake_word_detected_callback_(last_detected_wake_word_);
                 }
-            }
+            // }
         }
         multinet_->clean(multinet_model_data_);
     } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
