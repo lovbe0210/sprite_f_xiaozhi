@@ -100,39 +100,39 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
         return;
     }
 
-#ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
-    esp_log_level_set(TAG, ESP_LOG_DEBUG);
-#endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
+    #ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
+        esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
 
     const char* video_device_name = nullptr;
 
     if (false) { /* 用于构建 else if */
     }
-#if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
-    else if (config.csi != nullptr) {
-        video_device_name = ESP_VIDEO_MIPI_CSI_DEVICE_NAME;
-    }
-#endif
-#if CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE
-    else if (config.dvp != nullptr) {
-        video_device_name = ESP_VIDEO_DVP_DEVICE_NAME;
-    }
-#endif
-#if CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_VIDEO_DEVICE
-    else if (config.jpeg != nullptr) {
-        video_device_name = ESP_VIDEO_JPEG_DEVICE_NAME;
-    }
-#endif
-#if CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE
-    else if (config.spi != nullptr) {
-        video_device_name = ESP_VIDEO_SPI_DEVICE_NAME;
-    }
-#endif
-#if CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
-    else if (config.usb_uvc != nullptr) {
-        video_device_name = ESP_VIDEO_USB_UVC_DEVICE_NAME(0);
-    }
-#endif
+    #if CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE
+        else if (config.csi != nullptr) {
+            video_device_name = ESP_VIDEO_MIPI_CSI_DEVICE_NAME;
+        }
+    #endif
+    #if CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE
+        else if (config.dvp != nullptr) {
+            video_device_name = ESP_VIDEO_DVP_DEVICE_NAME;
+        }
+    #endif
+    #if CONFIG_ESP_VIDEO_ENABLE_HW_JPEG_VIDEO_DEVICE
+        else if (config.jpeg != nullptr) {
+            video_device_name = ESP_VIDEO_JPEG_DEVICE_NAME;
+        }
+    #endif
+    #if CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE
+        else if (config.spi != nullptr) {
+            video_device_name = ESP_VIDEO_SPI_DEVICE_NAME;
+        }
+    #endif
+    #if CONFIG_ESP_VIDEO_ENABLE_USB_UVC_VIDEO_DEVICE
+        else if (config.usb_uvc != nullptr) {
+            video_device_name = ESP_VIDEO_USB_UVC_DEVICE_NAME(0);
+        }
+    #endif
 
     if (video_device_name == nullptr) {
         ESP_LOGE(TAG, "no video device is enabled");
@@ -143,9 +143,9 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
 
     if (video_fd_ < 0) {
         ESP_LOGE(TAG, "open %s failed, errno=%d(%s)", video_device_name, errno, strerror(errno));
-#if CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
-        log_available_video_devices();
-#endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
+        #if CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
+            log_available_video_devices();
+        #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
         return;
     }
 
