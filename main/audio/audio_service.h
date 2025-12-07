@@ -162,6 +162,7 @@ private:
     int received_byte_count_ = 0;
     int played_byte_count_ = 0;
     std::chrono::steady_clock::time_point last_audio_recv_time_;
+    std::chrono::steady_clock::time_point last_camera_capture_time_{};
 
     void AudioInputTask();
     void AudioOutputTask();

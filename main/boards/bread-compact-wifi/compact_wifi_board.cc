@@ -147,6 +147,7 @@ private:
 
         camera_ = new Esp32Camera(video_config);
         camera_->SetHMirror(false);
+        camera_->SetExplainUrl("http://10.2.2.104:20210/vl/Chat", "123456");
     }
 
     void InitializeButtons() {

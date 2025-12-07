@@ -260,9 +260,25 @@ void AudioService::AudioInputTask() {
             if (samples > 0) {
                 if (ReadAudioData(data, 16000, samples)) {
                     audio_processor_->Feed(std::move(data));
-                    continue;
                 }
             }
+
+            // 这里应该使用异步方式进行画面抓拍
+            auto& board = Board::GetInstance();
+            auto camera = board.GetCamera();
+            auto now = std::chrono::steady_clock::now();
+            if (camera && std::chrono::duration_cast<std::chrono::seconds>(now - last_camera_capture_time_).count() >= 2) {
+                last_camera_capture_time_ = now;
+                std::thread([camera]() {
+                    if (camera->CaptureRawFrame()) {
+                        std::string result = camera->Explain("what do you see?");
+                        ESP_LOGI(TAG, "camera explain result: %s", result.c_str());
+                    } else {
+                        ESP_LOGE(TAG, "camera capture failed");
+                    }
+                }).detach();
+            }
+            continue;
         }
 
         if (bits & AS_EVENT_AUDIO_VAD_RUNNING) { 

@@ -832,8 +832,8 @@ bool Esp32Camera::Capture() {
                 return false;
         }
 
-        auto image = std::make_unique<LvglAllocatedImage>(data, lvgl_image_size, w, h, stride, color_format);
-        display->SetPreviewImage(std::move(image));
+        // auto image = std::make_unique<LvglAllocatedImage>(data, lvgl_image_size, w, h, stride, color_format);
+        // display->SetPreviewImage(std::move(image));
     }
     return true;
 }
@@ -868,6 +868,92 @@ bool Esp32Camera::SetVFlip(bool enabled) {
     if (ioctl(video_fd_, VIDIOC_S_EXT_CTRLS, &ctrls) != 0) {
         ESP_LOGE(TAG, "set VFLIP failed");
         return false;
+    }
+    return true;
+}
+
+/**
+ * 只拍照，不做照片预览和显示
+ */
+bool Esp32Camera::CaptureRawFrame() {
+    if (encoder_thread_.joinable()) {
+        encoder_thread_.join();
+    }
+
+    if (!streaming_on_ || video_fd_ < 0) {
+        return false;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        struct v4l2_buffer buf = {};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        if (ioctl(video_fd_, VIDIOC_DQBUF, &buf) != 0) {
+            ESP_LOGE(TAG, "VIDIOC_DQBUF failed");
+            return false;
+        }
+        if (i == 2) {
+            // 保存帧副本到PSRAM
+            if (frame_.data) {
+                heap_caps_free(frame_.data);
+                frame_.data = nullptr;
+                frame_.format = 0;
+            }
+            frame_.len = buf.bytesused;
+            frame_.data = (uint8_t*)heap_caps_malloc(frame_.len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!frame_.data) {
+                ESP_LOGE(TAG, "alloc frame copy failed: need allocate %d bytes", buf.bytesused);
+                if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                    ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+                }
+                return false;
+            }
+
+            ESP_LOGW(TAG, "mmap_buffers_[buf.index].length = %d, frame.width = %d, frame.height = %d",
+                     mmap_buffers_[buf.index].length, frame_.width, frame_.height);
+            ESP_LOG_BUFFER_HEXDUMP(TAG, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, 256),
+                                   ESP_LOG_DEBUG);
+
+            switch (sensor_format_) {
+                case V4L2_PIX_FMT_RGB565:
+                case V4L2_PIX_FMT_RGB24:
+                case V4L2_PIX_FMT_YUYV:
+                case V4L2_PIX_FMT_YUV420:
+                case V4L2_PIX_FMT_GREY:
+                    memcpy(frame_.data, mmap_buffers_[buf.index].start,
+                           MIN(mmap_buffers_[buf.index].length, frame_.len));
+                    frame_.format = sensor_format_;
+                    break;
+                case V4L2_PIX_FMT_YUV422P: {
+                    // 这个格式是 422 YUYV，不是 planer
+                    frame_.format = V4L2_PIX_FMT_YUYV;
+                    memcpy(frame_.data, mmap_buffers_[buf.index].start,
+                           MIN(mmap_buffers_[buf.index].length, frame_.len));
+                    break;
+                }
+                case V4L2_PIX_FMT_RGB565X: {
+                    // 大端序的 RGB565 需要转换为小端序
+                    // 目前 esp_video 的大小端都会返回格式为 RGB565，不会返回格式为 RGB565X，此 case 用于未来版本兼容
+                    auto src16 = (uint16_t*)mmap_buffers_[buf.index].start;
+                    auto dst16 = (uint16_t*)frame_.data;
+                    size_t pixel_count = (size_t)frame_.width * (size_t)frame_.height;
+                    for (size_t i = 0; i < pixel_count; i++) {
+                        dst16[i] = __builtin_bswap16(src16[i]);
+                    }
+                    frame_.format = V4L2_PIX_FMT_RGB565;
+                    break;
+                }
+                default:
+                    ESP_LOGE(TAG, "unsupported sensor format: 0x%08x", sensor_format_);
+                    if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                        ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+                    }
+                    return false;
+            }
+        }
+        if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+            ESP_LOGE(TAG, "VIDIOC_QBUF failed");
+        }
     }
     return true;
 }
@@ -926,7 +1012,8 @@ std::string Esp32Camera::Explain(const std::string& question) {
                         memcpy(chunk.data, data, len);
                     }
                 } else {
-                    chunk.len = 0;  // Sentinel or error
+                    // 标记结束或错误
+                    chunk.len = 0;  
                 }
                 xQueueSend(jpeg_queue, &chunk, portMAX_DELAY);
                 return len;
@@ -1035,5 +1122,13 @@ std::string Esp32Camera::Explain(const std::string& question) {
     size_t remain_stack_size = uxTaskGetStackHighWaterMark(nullptr);
     ESP_LOGI(TAG, "Explain image size=%d bytes, compressed size=%d, remain stack size=%d, question=%s\n%s",
              (int)frame_.len, (int)total_sent, (int)remain_stack_size, question.c_str(), result.c_str());
+    // 主动释放帧内存，防止长期占用
+    if (frame_.data) {
+        ESP_LOGI(TAG, "Free frame memory size=%d bytes", (int)frame_.len);
+        heap_caps_free(frame_.data);
+        frame_.data = nullptr;
+        frame_.len = 0;
+        frame_.format = 0;
+    }
     return result;
 }

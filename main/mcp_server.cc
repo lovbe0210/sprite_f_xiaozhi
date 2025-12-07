@@ -50,7 +50,8 @@ void McpServer::AddCommonTools() {
         PropertyList(),
         [&board](const PropertyList& properties) -> ReturnValue {
             return board.GetDeviceStatusJson();
-        });
+        }
+    );
 
     AddTool("self.audio_speaker.set_volume", 
         "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
@@ -61,8 +62,20 @@ void McpServer::AddCommonTools() {
             auto codec = board.GetAudioCodec();
             codec->SetOutputVolume(properties["volume"].value<int>());
             return true;
-        });
+        }
+    );
     
+    // 新增：获取当前音量工具
+    AddTool("self.audio_speaker.get_volume",
+        "Get the current volume of the audio speaker. Returns an integer between 0 and 100.",
+        PropertyList(),
+        [&board](const PropertyList& properties) -> ReturnValue {
+            auto codec = board.GetAudioCodec();
+            int volume = codec->output_volume();
+            return volume;
+        }
+    );
+
     auto backlight = board.GetBacklight();
     if (backlight) {
         AddTool("self.screen.set_brightness",
