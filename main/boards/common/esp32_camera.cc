@@ -446,6 +446,7 @@ bool Esp32Camera::Capture() {
                     }
                 }
 #else
+                    // 这里是从摄像头映射缓冲区复制数据到我们自己分配的帧缓冲区
                     memcpy(frame_.data, mmap_buffers_[buf.index].start,
                            MIN(mmap_buffers_[buf.index].length, frame_.len));
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_ENDIANNESS_SWAP
@@ -832,8 +833,8 @@ bool Esp32Camera::Capture() {
                 return false;
         }
 
-        // auto image = std::make_unique<LvglAllocatedImage>(data, lvgl_image_size, w, h, stride, color_format);
-        // display->SetPreviewImage(std::move(image));
+        auto image = std::make_unique<LvglAllocatedImage>(data, lvgl_image_size, w, h, stride, color_format);
+        display->SetPreviewImage(std::move(image));
     }
     return true;
 }
@@ -909,26 +910,19 @@ bool Esp32Camera::CaptureRawFrame() {
                 return false;
             }
 
-            ESP_LOGW(TAG, "mmap_buffers_[buf.index].length = %d, frame.width = %d, frame.height = %d",
-                     mmap_buffers_[buf.index].length, frame_.width, frame_.height);
-            ESP_LOG_BUFFER_HEXDUMP(TAG, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, 256),
-                                   ESP_LOG_DEBUG);
-
             switch (sensor_format_) {
                 case V4L2_PIX_FMT_RGB565:
                 case V4L2_PIX_FMT_RGB24:
                 case V4L2_PIX_FMT_YUYV:
                 case V4L2_PIX_FMT_YUV420:
                 case V4L2_PIX_FMT_GREY:
-                    memcpy(frame_.data, mmap_buffers_[buf.index].start,
-                           MIN(mmap_buffers_[buf.index].length, frame_.len));
+                    memcpy(frame_.data, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, frame_.len));
                     frame_.format = sensor_format_;
                     break;
                 case V4L2_PIX_FMT_YUV422P: {
                     // 这个格式是 422 YUYV，不是 planer
                     frame_.format = V4L2_PIX_FMT_YUYV;
-                    memcpy(frame_.data, mmap_buffers_[buf.index].start,
-                           MIN(mmap_buffers_[buf.index].length, frame_.len));
+                    memcpy(frame_.data, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, frame_.len));
                     break;
                 }
                 case V4L2_PIX_FMT_RGB565X: {
@@ -955,6 +949,26 @@ bool Esp32Camera::CaptureRawFrame() {
             ESP_LOGE(TAG, "VIDIOC_QBUF failed");
         }
     }
+
+    // 关闭视频流，清理缓冲区
+    // if (streaming_on_ && video_fd_ >= 0) {
+    //     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    //     ioctl(video_fd_, VIDIOC_STREAMOFF, &type);
+    // }
+    // for (auto& b : mmap_buffers_) {
+    //     if (b.start && b.length) {
+    //         munmap(b.start, b.length);
+    //     }
+    // }
+    // if (video_fd_ >= 0) {
+    //     close(video_fd_);
+    //     video_fd_ = -1;
+    // }
+    // sensor_format_ = 0;
+    // esp_video_deinit();
+    // mmap_buffers_.clear();
+
+
     return true;
 }
 
@@ -1052,6 +1066,12 @@ std::string Esp32Camera::Explain(const std::string& question) {
             }
         }
         vQueueDelete(jpeg_queue);
+        if (frame_.data) {
+            heap_caps_free(frame_.data);
+            frame_.data = nullptr;
+            frame_.len = 0;
+            frame_.format = 0;
+        }
         throw std::runtime_error("Failed to connect to explain URL");
     }
 
@@ -1124,7 +1144,6 @@ std::string Esp32Camera::Explain(const std::string& question) {
              (int)frame_.len, (int)total_sent, (int)remain_stack_size, question.c_str(), result.c_str());
     // 主动释放帧内存，防止长期占用
     if (frame_.data) {
-        ESP_LOGI(TAG, "Free frame memory size=%d bytes", (int)frame_.len);
         heap_caps_free(frame_.data);
         frame_.data = nullptr;
         frame_.len = 0;

@@ -263,11 +263,11 @@ void AudioService::AudioInputTask() {
                 }
             }
 
-            // 这里应该使用异步方式进行画面抓拍
+            // 使用异步方式进行画面抓拍
             auto& board = Board::GetInstance();
             auto camera = board.GetCamera();
             auto now = std::chrono::steady_clock::now();
-            if (camera && std::chrono::duration_cast<std::chrono::seconds>(now - last_camera_capture_time_).count() >= 2) {
+            if (camera && std::chrono::duration_cast<std::chrono::seconds>(now - last_camera_capture_time_).count() >= 3) {
                 last_camera_capture_time_ = now;
                 std::thread([camera]() {
                     if (camera->CaptureRawFrame()) {
