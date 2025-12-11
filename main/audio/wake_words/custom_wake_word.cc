@@ -181,15 +181,12 @@ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
         for (int i = 0; i < mn_result->num && running_; i++) {
             ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
                     mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
-            // auto& command = commands_[mn_result->command_id[i] - 1];
-            // if (command.action == "wake") {
-                last_detected_wake_word_ = mn_result->string;
-                running_ = false;
-                if (wake_word_detected_callback_) {
-                    ESP_LOGI(TAG, "Wake word detected: %s", last_detected_wake_word_.c_str());
-                    wake_word_detected_callback_(last_detected_wake_word_);
-                }
-            // }
+            last_detected_wake_word_ = mn_result->string;
+            running_ = false;
+            if (wake_word_detected_callback_) {
+                ESP_LOGI(TAG, "Wake word detected: %s", last_detected_wake_word_.c_str());
+                wake_word_detected_callback_(last_detected_wake_word_);
+            }
         }
         multinet_->clean(multinet_model_data_);
     } else if (mn_state == ESP_MN_STATE_TIMEOUT) {

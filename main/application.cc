@@ -667,7 +667,6 @@ void Application::OnWakeWordDetected() {
         }
 
         auto wake_word = audio_service_.GetLastWakeWord();
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
         #if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
             // Encode and send the wake word data to the server
             while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -754,6 +753,7 @@ void Application::SetDeviceState(DeviceState state) {
                 // 在说话时禁用唤醒词检测，通过VAD检测静音来打断说话，就和我们正常对话时一样，而非通过唤醒词打断
                 audio_service_.EnableVoiceProcessing(false);
                 audio_service_.EnableWakeWordDetection(false);
+                audio_service_.EnableDeviceAec(true);
                 audio_service_.EnableAudioVadDetecting(true);
             }
             audio_service_.ResetDecoder();
