@@ -233,9 +233,9 @@ public:
         if (std::holds_alternative<std::string>(return_value)) {
             cJSON_AddStringToObject(text, "text", std::get<std::string>(return_value).c_str());
         } else if (std::holds_alternative<bool>(return_value)) {
-            cJSON_AddStringToObject(text, "text", std::get<bool>(return_value) ? "true" : "false");
+            cJSON_AddBoolToObject(text, "text", std::get<bool>(return_value));
         } else if (std::holds_alternative<int>(return_value)) {
-            cJSON_AddStringToObject(text, "text", std::to_string(std::get<int>(return_value)).c_str());
+            cJSON_AddNumberToObject(text, "text", std::get<int>(return_value));
         }
         cJSON_AddItemToArray(content, text);
         cJSON_AddItemToObject(result, "content", content);
@@ -268,11 +268,11 @@ private:
 
     void ParseCapabilities(const cJSON* capabilities);
 
-    void ReplyResult(int id, const std::string& result);
-    void ReplyError(int id, const std::string& message);
+    void ReplyResult(int64_t id, const std::string& result);
+    void ReplyError(int64_t id, const std::string& message);
 
-    void GetToolsList(int id, const std::string& cursor);
-    void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments, int stack_size);
+    void GetToolsList(int64_t id, const std::string& cursor);
+    void DoToolCall(int64_t id, const std::string& tool_name, const cJSON* tool_arguments, int stack_size);
 
     std::vector<McpTool*> tools_;
     std::thread tool_call_thread_;

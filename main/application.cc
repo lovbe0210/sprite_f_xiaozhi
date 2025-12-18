@@ -349,6 +349,9 @@ void Application::Start() {
     };
     callbacks.on_vad_change = [this](bool speaking) {
         ESP_LOGW(TAG, "VAD change: %s", speaking ? "speaking" : "silent");
+        if (!speaking || device_state_ != kDeviceStateSpeaking) {
+            return;
+        } 
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);
@@ -650,6 +653,9 @@ void Application::OnWakeWordDetected() {
 }
 
 void Application::AbortSpeaking(AbortReason reason) {
+    if (aborted_) {
+        return;
+    }
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
     protocol_->SendAbortSpeaking(reason);

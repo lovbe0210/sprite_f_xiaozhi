@@ -55,6 +55,17 @@ void McpServer::AddCommonTools() {
             codec->SetOutputVolume(properties["volume"].value<int>());
             return true;
         });
+
+     // 新增：获取当前音量工具
+    AddTool("self.audio_speaker.get_volume",
+        "Get the current volume of the audio speaker. Returns an integer between 0 and 100.",
+        PropertyList(),
+        [&board](const PropertyList& properties) -> ReturnValue {
+            auto codec = board.GetAudioCodec();
+            int volume = codec->output_volume();
+            return volume;
+        }
+    );
     
     auto backlight = board.GetBacklight();
     if (backlight) {
@@ -183,7 +194,7 @@ void McpServer::ParseMessage(const cJSON* json) {
         ESP_LOGE(TAG, "Invalid id for method: %s", method_str.c_str());
         return;
     }
-    auto id_int = id->valueint;
+    int64_t requestId = (int64_t)cJSON_GetNumberValue(id);
     
     if (method_str == "initialize") {
         if (cJSON_IsObject(params)) {
@@ -196,7 +207,7 @@ void McpServer::ParseMessage(const cJSON* json) {
         std::string message = "{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"" BOARD_NAME "\",\"version\":\"";
         message += app_desc->version;
         message += "\"}}";
-        ReplyResult(id_int, message);
+        ReplyResult(requestId, message);
     } else if (method_str == "tools/list") {
         std::string cursor_str = "";
         if (params != nullptr) {
@@ -205,39 +216,39 @@ void McpServer::ParseMessage(const cJSON* json) {
                 cursor_str = std::string(cursor->valuestring);
             }
         }
-        GetToolsList(id_int, cursor_str);
+        GetToolsList(requestId, cursor_str);
     } else if (method_str == "tools/call") {
         if (!cJSON_IsObject(params)) {
             ESP_LOGE(TAG, "tools/call: Missing params");
-            ReplyError(id_int, "Missing params");
+            ReplyError(requestId, "Missing params");
             return;
         }
         auto tool_name = cJSON_GetObjectItem(params, "name");
         if (!cJSON_IsString(tool_name)) {
             ESP_LOGE(TAG, "tools/call: Missing name");
-            ReplyError(id_int, "Missing name");
+            ReplyError(requestId, "Missing name");
             return;
         }
         auto tool_arguments = cJSON_GetObjectItem(params, "arguments");
         if (tool_arguments != nullptr && !cJSON_IsObject(tool_arguments)) {
             ESP_LOGE(TAG, "tools/call: Invalid arguments");
-            ReplyError(id_int, "Invalid arguments");
+            ReplyError(requestId, "Invalid arguments");
             return;
         }
         auto stack_size = cJSON_GetObjectItem(params, "stackSize");
         if (stack_size != nullptr && !cJSON_IsNumber(stack_size)) {
             ESP_LOGE(TAG, "tools/call: Invalid stackSize");
-            ReplyError(id_int, "Invalid stackSize");
+            ReplyError(requestId, "Invalid stackSize");
             return;
         }
-        DoToolCall(id_int, std::string(tool_name->valuestring), tool_arguments, stack_size ? stack_size->valueint : DEFAULT_TOOLCALL_STACK_SIZE);
+        DoToolCall(requestId, std::string(tool_name->valuestring), tool_arguments, stack_size ? stack_size->valueint : DEFAULT_TOOLCALL_STACK_SIZE);
     } else {
         ESP_LOGE(TAG, "Method not implemented: %s", method_str.c_str());
-        ReplyError(id_int, "Method not implemented: " + method_str);
+        ReplyError(requestId, "Method not implemented: " + method_str);
     }
 }
 
-void McpServer::ReplyResult(int id, const std::string& result) {
+void McpServer::ReplyResult(int64_t id, const std::string& result) {
     std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
     payload += std::to_string(id) + ",\"result\":";
     payload += result;
@@ -245,7 +256,7 @@ void McpServer::ReplyResult(int id, const std::string& result) {
     Application::GetInstance().SendMcpMessage(payload);
 }
 
-void McpServer::ReplyError(int id, const std::string& message) {
+void McpServer::ReplyError(int64_t id, const std::string& message) {
     std::string payload = "{\"jsonrpc\":\"2.0\",\"id\":";
     payload += std::to_string(id);
     payload += ",\"error\":{\"message\":\"";
@@ -254,7 +265,7 @@ void McpServer::ReplyError(int id, const std::string& message) {
     Application::GetInstance().SendMcpMessage(payload);
 }
 
-void McpServer::GetToolsList(int id, const std::string& cursor) {
+void McpServer::GetToolsList(int64_t id, const std::string& cursor) {
     const int max_payload_size = 8000;
     std::string json = "{\"tools\":[";
     
@@ -305,7 +316,7 @@ void McpServer::GetToolsList(int id, const std::string& cursor) {
     ReplyResult(id, json);
 }
 
-void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments, int stack_size) {
+void McpServer::DoToolCall(int64_t id, const std::string& tool_name, const cJSON* tool_arguments, int stack_size) {
     auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
                                  [&tool_name](const McpTool* tool) { 
                                      return tool->name() == tool_name; 
