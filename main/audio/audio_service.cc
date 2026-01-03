@@ -316,13 +316,13 @@ void AudioService::AudioOutputTask() {
         last_output_time_ = std::chrono::steady_clock::now();
         debug_statistics_.playback_count++;
 
-#if CONFIG_USE_SERVER_AEC
-        /* Record the timestamp for server AEC */
-        if (task->timestamp > 0) {
-            lock.lock();
-            timestamp_queue_.push_back(task->timestamp);
-        }
-#endif
+        #if CONFIG_USE_SERVER_AEC
+                /* Record the timestamp for server AEC */
+                if (task->timestamp > 0) {
+                    lock.lock();
+                    timestamp_queue_.push_back(task->timestamp);
+                }
+        #endif
     }
 
     ESP_LOGW(TAG, "Audio output task stopped");
