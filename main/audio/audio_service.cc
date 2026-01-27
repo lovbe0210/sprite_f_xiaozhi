@@ -1,6 +1,7 @@
 #include "audio_service.h"
 #include <esp_log.h>
 #include <cstring>
+#include "settings.h"
 
 #if CONFIG_USE_AUDIO_PROCESSOR
 #include "processors/afe_audio_processor.h"
@@ -128,7 +129,14 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->OpusCodecTask();
         vTaskDelete(NULL);
-    }, "opus_codec", 2048 * 13, this, 2, &opus_codec_task_handle_);
+    }, "opus_codec", 2048 * 13, this, 3, &opus_codec_task_handle_);
+
+    /* Start the camera capture task */
+    // xTaskCreate([](void* arg) {
+    //     AudioService* audio_service = (AudioService*)arg;
+    //     audio_service->CameraCaptureTask();
+    //     vTaskDelete(NULL);
+    // }, "camera_capture", 2048 * 2, this, 2, &camera_capture_task_handle_);
 }
 
 void AudioService::Stop() {
@@ -263,21 +271,6 @@ void AudioService::AudioInputTask() {
                 }
             }
 
-            // 使用异步方式进行画面抓拍
-            auto& board = Board::GetInstance();
-            auto camera = board.GetCamera();
-            auto now = std::chrono::steady_clock::now();
-            if (camera && std::chrono::duration_cast<std::chrono::seconds>(now - last_camera_capture_time_).count() >= 3) {
-                last_camera_capture_time_ = now;
-                std::thread([camera]() {
-                    if (camera->CaptureRawFrame()) {
-                        std::string result = camera->Explain("what do you see?");
-                        ESP_LOGI(TAG, "camera explain result: %s", result.c_str());
-                    } else {
-                        ESP_LOGE(TAG, "camera capture failed");
-                    }
-                }).detach();
-            }
             continue;
         }
 
@@ -422,6 +415,7 @@ void AudioService::OpusCodecTask() {
 
         if (device_state == kDeviceStateSpeaking && audio_decode_queue_.empty() && received_byte_count_ == 0 && silence_duration > MAX_SPEAKING_TIMEOUT_MS) {
             ESP_LOGI(TAG, "receive speaker audio timeout, will stop speaking");
+            Application::GetInstance().SetDeviceState(kDeviceStateListening);
             Application::GetInstance().AbortSpeaking(kAbortReasonNone);
             continue;
         }
@@ -456,12 +450,12 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
 
 void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm) {
     EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
-                AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING | AS_EVENT_AUDIO_VAD_RUNNING,
+                AS_EVENT_AUDIO_PROCESSOR_RUNNING | AS_EVENT_AUDIO_VAD_RUNNING,
                 pdFALSE, pdFALSE, portMAX_DELAY);
     if (bits & AS_EVENT_AUDIO_VAD_RUNNING) {
-        // free audio data if only VAD is enabled without other processors
-        pcm.clear();
-        return;
+        // TODO free audio data if only VAD is enabled without other processors
+        // pcm.clear();
+        // return;
     }
     
     auto task = std::make_unique<AudioTask>();
@@ -578,7 +572,7 @@ void AudioService::EnableAudioVadDetecting(bool enable) {
         audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_);
         audio_processor_initialized_ = true;
     }
-    audio_processor_->EnableAudioVadDetecting(enable);
+    // audio_processor_->EnableAudioVadDetecting(enable);
     if (enable) {
         /* We should make sure no audio is playing */
         ResetDecoder();
@@ -783,4 +777,91 @@ bool AudioService::IsAfeWakeWord() {
     #else
         return false;
     #endif
+}
+
+void AudioService::CameraCaptureTask() {
+    ESP_LOGI(TAG, "Camera capture task started");
+
+    while (!service_stopped_) {
+        // Check if camera is available
+        auto& board = Board::GetInstance();
+        auto camera = board.GetCamera();
+        if (!camera) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        // Wait 3 seconds between captures
+        vTaskDelay(pdMS_TO_TICKS(3000));
+
+        if (service_stopped_) {
+            break;
+        }
+
+        // Skip if camera was marked as unavailable
+        if (!camera_available_) {
+            ESP_LOGD(TAG, "Camera marked as unavailable, skipping capture");
+            continue;
+        }
+
+        // Get the latest explain URL from Settings before capturing
+        // Priority: api_server (from OTA) > ota_url > CONFIG_OTA_URL
+        Settings settings("wifi", false);
+        std::string api_server = settings.GetString("api_server");
+
+        std::string explain_url;
+        if (!api_server.empty()) {
+            // Use api_server from OTA response
+            explain_url = api_server;
+            size_t protocol_pos = explain_url.find("://");
+            if (protocol_pos != std::string::npos) {
+                size_t path_pos = explain_url.find('/', protocol_pos + 3);
+                if (path_pos != std::string::npos) {
+                    explain_url = explain_url.substr(0, path_pos) + "/v1/chat";
+                } else {
+                    explain_url += "/v1/chat";
+                }
+            }
+            ESP_LOGI(TAG, "Using API server: %s", explain_url.c_str());
+        } else {
+            // Fallback to ota_url or CONFIG_OTA_URL
+            std::string ota_url = settings.GetString("ota_url");
+            if (ota_url.empty()) {
+                ota_url = CONFIG_OTA_URL;
+            }
+            explain_url = ota_url;
+            size_t protocol_pos = explain_url.find("://");
+            if (protocol_pos != std::string::npos) {
+                size_t path_pos = explain_url.find('/', protocol_pos + 3);
+                if (path_pos != std::string::npos) {
+                    explain_url = explain_url.substr(0, path_pos) + "/v1/chat";
+                } else {
+                    explain_url += "/v1/chat";
+                }
+            }
+            ESP_LOGI(TAG, "Using OTA URL: %s", explain_url.c_str());
+        }
+
+        // Update camera explain URL
+        camera->SetExplainUrl(explain_url, "123456");
+
+        // Capture frame with exception handling
+        try {
+            if (camera->CaptureRawFrame()) {
+                std::string result = camera->Explain("what do you see?");
+                ESP_LOGI(TAG, "camera explain result: %s", result.c_str());
+                camera_available_ = true;  // Mark as available
+            } else {
+                ESP_LOGE(TAG, "camera capture failed");
+                camera_available_ = false;  // Mark as unavailable
+            }
+        } catch (const std::exception& e) {
+            ESP_LOGE(TAG, "camera capture exception: %s", e.what());
+            camera_available_ = false;  // Mark as unavailable on error
+        }
+
+        last_camera_capture_time_ = std::chrono::steady_clock::now();
+    }
+
+    ESP_LOGW(TAG, "Camera capture task stopped");
 }

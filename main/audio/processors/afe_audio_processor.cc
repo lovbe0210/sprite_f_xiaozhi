@@ -55,19 +55,20 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     #endif
 
     // VAD检测
-    #ifdef CONFIG_USE_AUDIO_VAD_DETECTION
-        char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
-        if (vad_model_name != nullptr) {
-            afe_config->vad_init = true;
-            afe_config->vad_model_name = vad_model_name;
-            afe_config->vad_mode = VAD_MODE_0;
-            afe_config->vad_min_noise_ms = 100;
-        } else {
-            afe_config->vad_init = false;
-        }
-    #else
-        afe_config->vad_init = false;
-    #endif
+    afe_config->vad_init = false;
+    // #ifdef CONFIG_USE_AUDIO_VAD_DETECTION
+    //     char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
+    //     if (vad_model_name != nullptr) {
+    //         afe_config->vad_init = true;
+    //         afe_config->vad_model_name = vad_model_name;
+    //         afe_config->vad_mode = VAD_MODE_0;
+    //         afe_config->vad_min_noise_ms = 100;
+    //     } else {
+    //         afe_config->vad_init = false;
+    //     }
+    // #else
+    //     afe_config->vad_init = false;
+    // #endif
 
     // 设备端回声消除    
     #ifdef CONFIG_USE_DEVICE_AEC
@@ -182,7 +183,6 @@ void AfeAudioProcessor::AudioProcessorTask() {
 
             // Output complete frames when buffer has enough data
             while (output_buffer_.size() >= frame_samples_) {
-                // ESP_LOGE(TAG, "999999999999-Output size: %d, %d, %d", samples, frame_samples_, output_buffer_.size());
                 if (output_buffer_.size() == frame_samples_) {
                     // If buffer size equals frame size, move the entire buffer
                     output_callback_(std::move(output_buffer_));
@@ -201,8 +201,10 @@ void AfeAudioProcessor::AudioProcessorTask() {
 void AfeAudioProcessor::EnableDeviceAec(bool enable) {
     #if CONFIG_USE_DEVICE_AEC
         if (enable) {
+            ESP_LOGE(TAG, "AEC ENABLE ------");
             afe_iface_->enable_aec(afe_data_);
         } else {
+            ESP_LOGE(TAG, "AEC DISABLE ------");
             afe_iface_->disable_aec(afe_data_);
         }
         codec_->EnableInputReference(enable);

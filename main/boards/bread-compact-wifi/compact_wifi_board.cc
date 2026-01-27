@@ -11,6 +11,7 @@
 #include "led/single_led.h"
 #include "esp32_camera.h"
 #include "assets/lang_config.h"
+#include "settings.h"
 
 #include <wifi_station.h>
 #include <esp_log.h>
@@ -147,7 +148,8 @@ private:
 
         camera_ = new Esp32Camera(video_config);
         camera_->SetHMirror(false);
-        camera_->SetExplainUrl("http://10.2.2.104:20210/vl/Chat", "123456");
+        // Camera explain URL will be set dynamically when capturing
+        // to get the latest api_server from OTA response
     }
 
     void InitializeButtons() {
@@ -211,7 +213,7 @@ public:
         InitializeSsd1306Display();
         InitializeButtons();
         InitializeTools();
-        InitializeCamera();
+        // InitializeCamera();  // 这个开发板没有摄像头模块，注释掉
     }
 
     virtual Led* GetLed() override {
@@ -240,7 +242,8 @@ public:
     }
 
     virtual Camera* GetCamera() override {
-        return camera_;
+        // 这个开发板没有摄像头模块，返回 nullptr
+        return nullptr;
     }
 };
 

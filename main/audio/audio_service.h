@@ -103,6 +103,7 @@ public:
     void EnableAudioVadDetecting(bool enable);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
+    void EnableDeviceAecWithDelayedVad(bool enable);
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
@@ -138,6 +139,7 @@ private:
     TaskHandle_t audio_input_task_handle_ = nullptr;
     TaskHandle_t audio_output_task_handle_ = nullptr;
     TaskHandle_t opus_codec_task_handle_ = nullptr;
+    TaskHandle_t camera_capture_task_handle_ = nullptr;
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_decode_queue_;
@@ -153,6 +155,8 @@ private:
     bool voice_detected_ = false;
     bool service_stopped_ = true;
     bool audio_input_need_warmup_ = false;
+    bool aec_vad_delay_enabled_ = false;
+    std::chrono::steady_clock::time_point aec_start_time_;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
@@ -163,10 +167,12 @@ private:
     int played_byte_count_ = 0;
     std::chrono::steady_clock::time_point last_audio_recv_time_;
     std::chrono::steady_clock::time_point last_camera_capture_time_{};
+    bool camera_available_ = false;  // Track if camera is working
 
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
+    void CameraCaptureTask();
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
     void CheckAndUpdateAudioPowerState();

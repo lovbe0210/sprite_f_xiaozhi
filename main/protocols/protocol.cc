@@ -43,7 +43,10 @@ void Protocol::SendAbortSpeaking(AbortReason reason) {
     std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"abort\"";
     if (reason == kAbortReasonWakeWordDetected) {
         message += ",\"reason\":\"wake_word_detected\"";
+    } else if (reason == kAbortReasonVAD) {
+        message += ",\"reason\":\"vad\"";
     }
+    
     message += "}";
     SendText(message);
 }

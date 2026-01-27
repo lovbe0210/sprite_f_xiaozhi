@@ -185,7 +185,8 @@ int MockAecAudioCodec::Read(int16_t* dest, int samples) {
       
         // ref data
         if (input_reference_) {
-            dest[i++] = read_pos_ < write_pos_ ? ref_buffer_[read_pos_++] : 0;       
+            // dest[i++] = read_pos_ < write_pos_ ? ref_buffer_[read_pos_++] : 0;
+            dest[i++] = 0;       
         } else {
             dest[i++] = 0;
         }

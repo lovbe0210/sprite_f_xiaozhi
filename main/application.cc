@@ -250,26 +250,32 @@ void Application::DismissAlert() {
 
 void Application::ToggleChatState() {
     if (device_state_ == kDeviceStateActivating) {
+        ESP_LOGE(TAG, "111111111111111");
         SetDeviceState(kDeviceStateIdle);
         return;
     } else if (device_state_ == kDeviceStateWifiConfiguring) {
+        ESP_LOGE(TAG, "22222222222222222");
         audio_service_.EnableAudioTesting(true);
         SetDeviceState(kDeviceStateAudioTesting);
         return;
     } else if (device_state_ == kDeviceStateAudioTesting) {
+        ESP_LOGE(TAG, "3333333333333");
         audio_service_.EnableAudioTesting(false);
         SetDeviceState(kDeviceStateWifiConfiguring);
         return;
     }
 
     if (!protocol_) {
+        ESP_LOGE(TAG, "44444444444444444");
         ESP_LOGE(TAG, "Protocol not initialized");
         return;
     }
 
     if (device_state_ == kDeviceStateIdle) {
+        ESP_LOGE(TAG, "5555555555555555");
         Schedule([this]() {
             if (!protocol_->IsAudioChannelOpened()) {
+                ESP_LOGE(TAG, "6666666666666666");
                 SetDeviceState(kDeviceStateConnecting);
                 if (!protocol_->OpenAudioChannel()) {
                     return;
@@ -277,17 +283,24 @@ void Application::ToggleChatState() {
             }
 
             SetListeningMode(kListeningModeAutoStop);
+            ESP_LOGE(TAG, "77777777777777777777777");
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
+            ESP_LOGE(TAG, "888888888888888888");
             listening_mode_ = kListeningModeManualStop;
+            SetDeviceState(kDeviceStateIdle);
             AbortSpeaking(kAbortReasonNone);
         });
     } else if (device_state_ == kDeviceStateListening) {
+        ESP_LOGE(TAG, "8.55555555555555555555555555555");
         Schedule([this]() {
+            ESP_LOGE(TAG, "9999999999999999999");
             StopListening();
         });
     }
+    // 打印当前设备状态值
+    ESP_LOGE(TAG, "当前设备状态: %s", STATE_STRINGS[device_state_]); 
 }
 
 void Application::StartListening() {
@@ -318,7 +331,7 @@ void Application::StartListening() {
         });
     } else if (device_state_ == kDeviceStateSpeaking) {
         Schedule([this]() {
-            AbortSpeaking(kAbortReasonNone);
+            // AbortSpeaking(kAbortReasonNone);
             ESP_LOGE(TAG, "start listening and found deviceState is Speaking, listeningMode will be set to kListeningModeManualStop");
             SetListeningMode(kListeningModeManualStop);
         });
@@ -339,11 +352,15 @@ void Application::StopListening() {
     };
     // If not valid, do nothing
     if (std::find(valid_states.begin(), valid_states.end(), device_state_) == valid_states.end()) {
+        ESP_LOGE(TAG, "10101011010101010110");
         return;
     }
 
+    ESP_LOGE(TAG, "121212121212121212");
+
     Schedule([this]() {
         if (device_state_ == kDeviceStateListening) {
+            ESP_LOGE(TAG, "1313131313131313");
             protocol_->SendStopListening();
             SetDeviceState(kDeviceStateIdle);
         }
@@ -376,10 +393,11 @@ void Application::Start() {
         ESP_LOGW(TAG, "VAD change: %s", speaking ? "speaking" : "silent");
         if (!speaking) {
             return;
-        } 
+        }
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
         Schedule([this]() {
-            AbortSpeaking(kAbortReasonNone);
+            AbortSpeaking(kAbortReasonVAD);
+            SetDeviceState(kDeviceStateListening);
         });
     };
     audio_service_.SetCallbacks(callbacks);
@@ -608,7 +626,8 @@ void Application::MainEventLoop() {
         }
 
         if (bits & MAIN_EVENT_VAD_CHANGE) {
-            if (device_state_ == kDeviceStateListening) {
+            if (device_state_ == kDeviceStateSpeaking) {
+                // 显示屏状态变更
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             }
@@ -681,7 +700,8 @@ void Application::OnWakeWordDetected() {
             audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
         #endif
     } else if (device_state_ == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonWakeWordDetected);
+        // 在说话时不在进行唤醒词检测
+        // AbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (device_state_ == kDeviceStateActivating) {
         SetDeviceState(kDeviceStateIdle);
     }
@@ -753,7 +773,7 @@ void Application::SetDeviceState(DeviceState state) {
                 // 在说话时禁用唤醒词检测，通过VAD检测静音来打断说话，就和我们正常对话时一样，而非通过唤醒词打断
                 audio_service_.EnableVoiceProcessing(false);
                 audio_service_.EnableWakeWordDetection(false);
-                audio_service_.EnableDeviceAec(true);
+                // audio_service_.EnableDeviceAec(true);    
                 audio_service_.EnableAudioVadDetecting(true);
             }
             audio_service_.ResetDecoder();
@@ -861,9 +881,10 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 #endif
     } else if (device_state_ == kDeviceStateSpeaking) {
-        Schedule([this]() {
-            AbortSpeaking(kAbortReasonNone);
-        });
+        // 说话的时候不在进行唤醒词检测
+        // Schedule([this]() {
+        //     AbortSpeaking(kAbortReasonNone);
+        // });
     } else if (device_state_ == kDeviceStateListening) {   
         Schedule([this]() {
             if (protocol_) {

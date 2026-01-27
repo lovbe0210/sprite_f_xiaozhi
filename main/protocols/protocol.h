@@ -32,6 +32,7 @@ struct BinaryProtocol3 {
 
 enum AbortReason {
     kAbortReasonNone,
+    kAbortReasonVAD,
     kAbortReasonWakeWordDetected
 };
 
