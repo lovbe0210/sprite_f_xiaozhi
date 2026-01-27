@@ -76,20 +76,6 @@ void McpServer::AddCommonTools() {
         }
     );
 
-    auto backlight = board.GetBacklight();
-    if (backlight) {
-        AddTool("self.screen.set_brightness",
-            "Set the brightness of the screen.",
-            PropertyList({
-                Property("brightness", kPropertyTypeInteger, 0, 100)
-            }),
-            [backlight](const PropertyList& properties) -> ReturnValue {
-                uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
-                backlight->SetBrightness(brightness, true);
-                return true;
-            });
-    }
-
 #ifdef HAVE_LVGL
     auto display = board.GetDisplay();
     if (display && display->GetTheme() != nullptr) {
