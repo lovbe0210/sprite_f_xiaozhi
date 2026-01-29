@@ -41,7 +41,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     afe_config_t* afe_config = afe_config_init(input_format.c_str(), NULL, AFE_TYPE_VC, AFE_MODE_HIGH_PERF);
 
     // 噪音抑制
-    #ifdef CONFIG_AUDIO_NOISE_SUPPRESSION
+    #ifdef CONFIG_USE_AUDIO_NOISE_SUPPRESSION
         char* ns_model_name = esp_srmodel_filter(models, ESP_NSNET_PREFIX, NULL);
         if (ns_model_name != nullptr) {
             afe_config->ns_init = true;
@@ -55,20 +55,19 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     #endif
 
     // VAD检测
-    afe_config->vad_init = false;
-    // #ifdef CONFIG_USE_AUDIO_VAD_DETECTION
-    //     char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
-    //     if (vad_model_name != nullptr) {
-    //         afe_config->vad_init = true;
-    //         afe_config->vad_model_name = vad_model_name;
-    //         afe_config->vad_mode = VAD_MODE_0;
-    //         afe_config->vad_min_noise_ms = 100;
-    //     } else {
-    //         afe_config->vad_init = false;
-    //     }
-    // #else
-    //     afe_config->vad_init = false;
-    // #endif
+    #ifdef CONFIG_USE_AUDIO_VAD_DETECTION
+        char* vad_model_name = esp_srmodel_filter(models, ESP_VADN_PREFIX, NULL);
+        if (vad_model_name != nullptr) {
+            afe_config->vad_init = true;
+            afe_config->vad_model_name = vad_model_name;
+            afe_config->vad_mode = VAD_MODE_1;
+            afe_config->vad_min_noise_ms = 100;
+        } else {
+            afe_config->vad_init = false;
+        }
+    #else
+        afe_config->vad_init = false;
+    #endif
 
     // 设备端回声消除    
     #ifdef CONFIG_USE_DEVICE_AEC
@@ -200,13 +199,13 @@ void AfeAudioProcessor::AudioProcessorTask() {
 
 void AfeAudioProcessor::EnableDeviceAec(bool enable) {
     #if CONFIG_USE_DEVICE_AEC
-        if (enable) {
-            ESP_LOGE(TAG, "AEC ENABLE ------");
-            afe_iface_->enable_aec(afe_data_);
-        } else {
-            ESP_LOGE(TAG, "AEC DISABLE ------");
-            afe_iface_->disable_aec(afe_data_);
-        }
+        // if (enable) {
+        //     ESP_LOGE(TAG, "AEC ENABLE ------");
+        //     afe_iface_->enable_aec(afe_data_);
+        // } else {
+        //     ESP_LOGE(TAG, "AEC DISABLE ------");
+        //     afe_iface_->disable_aec(afe_data_);
+        // }
         codec_->EnableInputReference(enable);
     #else
         ESP_LOGE(TAG, "Device AEC is not supported");

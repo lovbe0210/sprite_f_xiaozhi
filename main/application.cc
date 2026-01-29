@@ -391,14 +391,14 @@ void Application::Start() {
     };
     callbacks.on_vad_change = [this](bool speaking) {
         ESP_LOGW(TAG, "VAD change: %s", speaking ? "speaking" : "silent");
-        if (!speaking) {
-            return;
-        }
-        xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
-        Schedule([this]() {
-            AbortSpeaking(kAbortReasonVAD);
-            SetDeviceState(kDeviceStateListening);
-        });
+        // if (!speaking) {
+        //     return;
+        // }
+        // xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
+        // Schedule([this]() {
+        //     AbortSpeaking(kAbortReasonVAD);
+        //     SetDeviceState(kDeviceStateListening);
+        // });
     };
     audio_service_.SetCallbacks(callbacks);
 
@@ -756,27 +756,22 @@ void Application::SetDeviceState(DeviceState state) {
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
 
-            // Make sure the audio processor is running
-            if (!audio_service_.IsAudioProcessorRunning()) {
-                // Send the start listening command
-                protocol_->SendStartListening(listening_mode_);
-                audio_service_.EnableWakeWordDetection(false);
-                audio_service_.EnableAudioVadDetecting(false);
-                audio_service_.EnableVoiceProcessing(true);
-            }
+            // Send the start listening command
+            protocol_->SendStartListening(listening_mode_);
+            audio_service_.EnableWakeWordDetection(false);
+            audio_service_.EnableAudioVadDetecting(false);
+            audio_service_.EnableVoiceProcessing(true);
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
 
-            if (listening_mode_ != kListeningModeRealtime) {
-                // wake word should can be detected in speaking mode by any method
-                // 在说话时禁用唤醒词检测，通过VAD检测静音来打断说话，就和我们正常对话时一样，而非通过唤醒词打断
-                audio_service_.EnableVoiceProcessing(false);
-                audio_service_.EnableWakeWordDetection(false);
-                // audio_service_.EnableDeviceAec(true);    
-                audio_service_.EnableAudioVadDetecting(true);
-            }
-            audio_service_.ResetDecoder();
+            // wake word should can be detected in speaking mode by any method
+            // 在说话时禁用唤醒词检测，通过VAD检测静音来打断说话，就和我们正常对话时一样，而非通过唤醒词打断
+            audio_service_.EnableVoiceProcessing(false);
+            audio_service_.EnableWakeWordDetection(false);
+            audio_service_.EnableDeviceAec(true);    
+            audio_service_.EnableAudioVadDetecting(true);
+            // audio_service_.ResetDecoder();
             break;
         default:
             // Do nothing

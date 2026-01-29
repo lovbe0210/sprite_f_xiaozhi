@@ -21,12 +21,6 @@ public:
     int Write(const int16_t* data, int samples) override;
     int Read(int16_t* dest, int samples) override;
 
-    std::vector<int16_t> output_buffer_;
-    std::mutex mutex_;
-    int32_t slice_index_ = 0;
-    uint64_t time_us_write_ = 0;
-    uint64_t time_us_read_ = 0;
-
 private:
     void InitSimplexChannels(gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout,
                             gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din);

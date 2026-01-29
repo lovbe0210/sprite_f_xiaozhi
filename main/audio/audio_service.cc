@@ -572,7 +572,7 @@ void AudioService::EnableAudioVadDetecting(bool enable) {
         audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_);
         audio_processor_initialized_ = true;
     }
-    // audio_processor_->EnableAudioVadDetecting(enable);
+    audio_processor_->EnableAudioVadDetecting(enable);
     if (enable) {
         /* We should make sure no audio is playing */
         ResetDecoder();
