@@ -61,7 +61,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
             afe_config->vad_init = true;
             afe_config->vad_model_name = vad_model_name;
             afe_config->vad_mode = VAD_MODE_2;
-            afe_config->vad_min_speech_ms = 400;
+            afe_config->vad_min_speech_ms = 450;
             afe_config->vad_mute_playback = true;
         } else {
             afe_config->vad_init = false;

@@ -247,31 +247,55 @@ int MockAecAudioCodec::Write(const int16_t* data, int samples) {
 }
 
 int MockAecAudioCodec::Read(int16_t* dest, int samples) {
-    static int32_t i_index = 0;
-    static bool first_speak = true;
-    const int32_t play_size = 512;
-
-    // 如果没有启用参考音频输入，直接读取麦克风原始数据
-    // 这样数据质量恒定，便于服务器做声纹识别
     if (!input_reference_) {
+        // 如果没有启用参考音频输入，直接读取麦克风原始数据,这样数据质量恒定，便于服务器做声纹识别
+        // 统一计算需要读取的数据大小
+        int size = samples / input_channels_;
+        int mic_channels = input_channels_ - 1;
+        int mic_samples = size * mic_channels;
+    
+        // 读取音频数据
         size_t bytes_read;
-        std::vector<int32_t> bit32_buffer(samples / 2);
-        if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples / 2 * sizeof(int32_t), &bytes_read, portMAX_DELAY) != ESP_OK) {
+        std::vector<int32_t> bit32_buffer(mic_samples);
+        if (i2s_channel_read(rx_handle_, bit32_buffer.data(), bit32_buffer.size() * sizeof(int32_t), &bytes_read, portMAX_DELAY) != ESP_OK) {
             ESP_LOGE(TAG, "Read Failed!");
             return 0;
         }
-
-        int read_samples = bytes_read / sizeof(int32_t);
-        for (int i = 0; i < read_samples; i++) {
-            int32_t value = bit32_buffer[i] >> 8;
-            int64_t temp = int64_t(value) / 256;
-            // 麦克风原始数据
-            dest[i * 2] = (temp > INT16_MAX) ? INT16_MAX : (temp < INT16_MIN) ? INT16_MIN : static_cast<int16_t>(temp);
-            // 参考音频位置填充0
-            dest[i * 2 + 1] = 0;
+    
+        // 转换32位数据为16位数据
+        mic_samples = bytes_read / sizeof(int32_t);
+        std::vector<int16_t> data(mic_samples);
+        for (int i = 0; i < mic_samples; i++) {
+            int32_t value = bit32_buffer[i] >> 12;
+            data[i] = (value > INT16_MAX) ? INT16_MAX : (value < -INT16_MAX) ? -INT16_MAX : (int16_t)value;
         }
-        return read_samples * 2;
+    
+        // 合并麦克风数据和参考数据（填充0）
+        int j = 0;
+        int i = 0;
+        std::lock_guard<std::mutex> lock(data_if_mutex_);
+        while (i < samples) {
+            // mic data 
+            if (mic_channels > 1) {
+                for (int k = 0; k < mic_channels; k++) {
+                    dest[i++] = data[j++];
+                }
+            } else if (mic_channels == 1){
+                dest[i++] = data[j++];
+            } else{
+                ESP_LOGE(TAG, "no channel can be read!");
+            }
+        
+            // ref data
+            dest[i++] = 0;
+        }
+        return samples;
     }
+
+
+    static int32_t i_index = 0;
+    static bool first_speak = true;
+    const int32_t play_size = 512;
 
     // 启用参考音频输入时，进行AEC处理和打断检测
     {

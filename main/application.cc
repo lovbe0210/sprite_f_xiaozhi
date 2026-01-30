@@ -391,14 +391,14 @@ void Application::Start() {
     };
     callbacks.on_vad_change = [this](bool speaking) {
         ESP_LOGW(TAG, "VAD change: %s", speaking ? "speaking" : "silent");
-        // if (!speaking) {
-        //     return;
-        // }
-        // xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
-        // Schedule([this]() {
-        //     AbortSpeaking(kAbortReasonVAD);
-        //     SetDeviceState(kDeviceStateListening);
-        // });
+        if (!speaking) {
+            return;
+        }
+        xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
+        Schedule([this]() {
+            AbortSpeaking(kAbortReasonVAD);
+            SetDeviceState(kDeviceStateListening);
+        });
     };
     audio_service_.SetCallbacks(callbacks);
 
