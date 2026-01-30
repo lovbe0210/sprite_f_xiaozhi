@@ -101,6 +101,22 @@ MockAecAudioCodec::~MockAecAudioCodec() {
     }
 }
 
+void MockAecAudioCodec::EnableInputReference(bool enable) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    // 当从 false 切换到 true 时，清空缓存，避免读取到上一个会话的残留数据
+    if (!input_reference_ && enable) {
+        std::fill(output_buffer_.begin(), output_buffer_.end(), 0);
+        slice_index_ = 0;
+        ESP_LOGI(TAG, "Input reference enabled, buffer cleared");
+    }
+
+    if (enable == input_reference_) {
+        return;
+    }
+
+    input_reference_ = enable;
+}
+
 void MockAecAudioCodec::InitSimplexChannels(gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout,
                                                   gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din) {
     // Create a new channel for speaker

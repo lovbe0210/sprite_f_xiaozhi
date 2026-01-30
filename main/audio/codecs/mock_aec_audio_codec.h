@@ -20,6 +20,7 @@ public:
     
     int Write(const int16_t* data, int samples) override;
     int Read(int16_t* dest, int samples) override;
+    void EnableInputReference(bool enable) override;  // 重写基类方法，切换时自动清空缓存
 
     std::vector<int16_t> output_buffer_;
     std::mutex mutex_;
