@@ -169,9 +169,6 @@ void MockAecAudioCodec::InitSimplexChannels(gpio_num_t spk_bclk, gpio_num_t spk_
 
 
 int MockAecAudioCodec::Write(const int16_t* data, int samples) {
-    // 切换变量：false=方案1(参考用音量控制数据), true=方案2(参考用原始数据)
-    const bool use_original_ref = true;
-
     const int32_t play_size = 512;
     std::vector<int32_t> buffer(samples);
 
@@ -202,36 +199,22 @@ int MockAecAudioCodec::Write(const int16_t* data, int samples) {
         const int16_t* ref_data;
         int ref_samples;
 
-        if (use_original_ref) {
-            // 方案2：参考音频使用原始数据（不经过音量控制）
-            if (needs_resample_) {
-                ref_samples = ref_resampler_.GetOutputSamples(samples);
-                resampled_buffer_.resize(ref_samples);
-                ref_resampler_.Process(data, samples, resampled_buffer_.data());
-                ref_data = resampled_buffer_.data();
-            } else {
-                ref_data = data;
-                ref_samples = samples;
-            }
-        } else {
-            // 方案1：参考音频使用音量控制后的数据
-            std::vector<int16_t> volume_adjusted_data(samples);
-            for (int i = 0; i < samples; i++) {
-                int64_t temp = int64_t(data[i]) * volume_factor;
-                volume_adjusted_data[i] = (temp > INT32_MAX) ? INT16_MAX :
-                                          (temp < INT32_MIN) ? INT16_MIN :
-                                          static_cast<int16_t>(temp >> 16);
-            }
+        std::vector<int16_t> volume_adjusted_data(samples);
+        for (int i = 0; i < samples; i++) {
+            int64_t temp = int64_t(data[i]) * volume_factor;
+            volume_adjusted_data[i] = (temp > INT32_MAX) ? INT16_MAX :
+                                        (temp < INT32_MIN) ? INT16_MIN :
+                                        static_cast<int16_t>(temp >> 16);
+        }
 
-            if (needs_resample_) {
-                ref_samples = ref_resampler_.GetOutputSamples(samples);
-                resampled_buffer_.resize(ref_samples);
-                ref_resampler_.Process(volume_adjusted_data.data(), samples, resampled_buffer_.data());
-                ref_data = resampled_buffer_.data();
-            } else {
-                ref_data = volume_adjusted_data.data();
-                ref_samples = samples;
-            }
+        if (needs_resample_) {
+            ref_samples = ref_resampler_.GetOutputSamples(samples);
+            resampled_buffer_.resize(ref_samples);
+            ref_resampler_.Process(volume_adjusted_data.data(), samples, resampled_buffer_.data());
+            ref_data = resampled_buffer_.data();
+        } else {
+            ref_data = volume_adjusted_data.data();
+            ref_samples = samples;
         }
 
         for (int i = 0; i < ref_samples; i++) {
