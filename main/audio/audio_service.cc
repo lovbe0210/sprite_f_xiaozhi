@@ -454,8 +454,8 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
                 pdFALSE, pdFALSE, portMAX_DELAY);
     if (bits & AS_EVENT_AUDIO_VAD_RUNNING) {
         // TODO free audio data if only VAD is enabled without other processors
-        // pcm.clear();
-        // return;
+        pcm.clear();
+        return;
     }
     
     auto task = std::make_unique<AudioTask>();
