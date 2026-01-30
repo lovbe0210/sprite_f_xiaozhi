@@ -231,50 +231,70 @@ int MockAecAudioCodec::Write(const int16_t* data, int samples) {
 }
 
 int MockAecAudioCodec::Read(int16_t* dest, int samples) {
-    //static int32_t delay_index = 1536;
-     static int32_t i_index = 0;
-     static bool first_speak = true;
-     const int32_t play_size = 512;
- 
+    static int32_t i_index = 0;
+    static bool first_speak = true;
+    const int32_t play_size = 512;
+
+    // 如果没有启用参考音频输入，直接读取麦克风原始数据
+    // 这样数据质量恒定，便于服务器做声纹识别
+    if (!input_reference_) {
+        size_t bytes_read;
+        std::vector<int32_t> bit32_buffer(samples / 2);
+        if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples / 2 * sizeof(int32_t), &bytes_read, portMAX_DELAY) != ESP_OK) {
+            ESP_LOGE(TAG, "Read Failed!");
+            return 0;
+        }
+
+        int read_samples = bytes_read / sizeof(int32_t);
+        for (int i = 0; i < read_samples; i++) {
+            int32_t value = bit32_buffer[i] >> 8;
+            int64_t temp = int64_t(value) / 256;
+            // 麦克风原始数据
+            dest[i * 2] = (temp > INT16_MAX) ? INT16_MAX : (temp < INT16_MIN) ? INT16_MIN : static_cast<int16_t>(temp);
+            // 参考音频位置填充0
+            dest[i * 2 + 1] = 0;
+        }
+        return read_samples * 2;
+    }
+
+    // 启用参考音频输入时，进行AEC处理和打断检测
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        time_us_read_  = esp_timer_get_time(); // 获取微秒级时间戳
-        if(time_us_read_ - time_us_write_ > 1000*100 ) // 100ms
-        {
+        time_us_read_ = esp_timer_get_time(); // 获取微秒级时间戳
+        if (time_us_read_ - time_us_write_ > 1000 * 100) { // 100ms
             std::fill(output_buffer_.begin(), output_buffer_.end(), 0);
             first_speak = true;
             slice_index_ = 0;
-            i_index = play_size*10 - 512;
+            i_index = play_size * 10 - 512;
         } else {
-            if(first_speak) {
+            if (first_speak) {
                 first_speak = false;
                 i_index = 0;
             }
         }
-        if(i_index < 0) i_index = play_size*10 + i_index;
+        if (i_index < 0) i_index = play_size * 10 + i_index;
     }
- 
+
     size_t bytes_read;
-    std::vector<int32_t> bit32_buffer(samples/2);
-    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples/2 * sizeof(int32_t), &bytes_read, portMAX_DELAY) != ESP_OK) {
+    std::vector<int32_t> bit32_buffer(samples / 2);
+    if (i2s_channel_read(rx_handle_, bit32_buffer.data(), samples / 2 * sizeof(int32_t), &bytes_read, portMAX_DELAY) != ESP_OK) {
         ESP_LOGE(TAG, "Read Failed!");
         return 0;
     }
- 
+
     samples = bytes_read / sizeof(int32_t);
     for (int i = 0; i < samples; i++) {
         int32_t value = bit32_buffer[i] >> 8;
         int64_t temp = int64_t(value) / 256; // 使用 int64_t 进行乘法运算
-        dest[i*2] = (temp > INT16_MAX) ? INT16_MAX : (temp < -INT16_MAX) ? -INT16_MAX : (int16_t)temp;
-        if(output_buffer_.size()> i_index ) {
-            dest[i*2 + 1] = output_buffer_[i_index];
+        // 目前只考虑单麦克风的设计，一个麦克风一个参考音频，交错填充数据
+        dest[i * 2] = (temp > INT16_MAX) ? INT16_MAX : (temp < -INT16_MAX) ? -INT16_MAX : static_cast<int16_t>(temp);
+        if (output_buffer_.size() > i_index) {
+            dest[i * 2 + 1] = output_buffer_[i_index];
         } else {
-            dest[i*2 + 1] = 0;
+            dest[i * 2 + 1] = 0;
         }
- 
-     //    dest[i*2 + 1] = 0;
-        i_index ++; 
-        if(i_index >= play_size*10) i_index = i_index - play_size*10;
+        i_index++;
+        if (i_index >= play_size * 10) i_index = i_index - play_size * 10;
     }
-    return samples*2;
+    return samples * 2;
 }

@@ -758,6 +758,7 @@ void Application::SetDeviceState(DeviceState state) {
 
             // Send the start listening command
             protocol_->SendStartListening(listening_mode_);
+            audio_service_.EnableDeviceAec(false);    
             audio_service_.EnableWakeWordDetection(false);
             audio_service_.EnableAudioVadDetecting(false);
             audio_service_.EnableVoiceProcessing(true);
@@ -771,7 +772,6 @@ void Application::SetDeviceState(DeviceState state) {
             audio_service_.EnableWakeWordDetection(false);
             audio_service_.EnableDeviceAec(true);    
             audio_service_.EnableAudioVadDetecting(true);
-            // audio_service_.ResetDecoder();
             break;
         default:
             // Do nothing

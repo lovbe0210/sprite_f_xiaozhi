@@ -89,7 +89,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
 
     // 关闭AEC功能，只在speaking状态下开启
     #ifdef CONFIG_USE_DEVICE_AEC
-        // afe_iface_->disable_aec(afe_data_);
+        afe_iface_->disable_aec(afe_data_);
         codec_->EnableInputReference(false);
     #endif
     
@@ -200,13 +200,13 @@ void AfeAudioProcessor::AudioProcessorTask() {
 
 void AfeAudioProcessor::EnableDeviceAec(bool enable) {
     #if CONFIG_USE_DEVICE_AEC
-        // if (enable) {
-        //     ESP_LOGE(TAG, "AEC ENABLE ------");
-        //     afe_iface_->enable_aec(afe_data_);
-        // } else {
-        //     ESP_LOGE(TAG, "AEC DISABLE ------");
-        //     afe_iface_->disable_aec(afe_data_);
-        // }
+        if (enable) {
+            ESP_LOGE(TAG, "AEC ENABLE ------");
+            afe_iface_->enable_aec(afe_data_);
+        } else {
+            ESP_LOGE(TAG, "AEC DISABLE ------");
+            afe_iface_->disable_aec(afe_data_);
+        }
         codec_->EnableInputReference(enable);
     #else
         ESP_LOGE(TAG, "Device AEC is not supported");
