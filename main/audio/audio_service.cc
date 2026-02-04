@@ -1,6 +1,7 @@
 #include "audio_service.h"
 #include <esp_log.h>
 #include <cstring>
+#include <esp_task_wdt.h>
 #include "settings.h"
 
 #if CONFIG_USE_AUDIO_PROCESSOR
@@ -374,6 +375,10 @@ void AudioService::OpusCodecTask() {
                 lock.lock();
             }
             debug_statistics_.decode_count++;
+             // 处理完一个包后主动让出CPU
+            lock.unlock();
+            vTaskDelay(pdMS_TO_TICKS(1));  // 让出CPU 1ms
+            lock.lock();
         }
         
         /* Encode the audio to send queue */
@@ -405,7 +410,6 @@ void AudioService::OpusCodecTask() {
                 audio_testing_queue_.push_back(std::move(packet));
             }
             debug_statistics_.encode_count++;
-            lock.lock();
         }
 
         /* Detect audio play over */

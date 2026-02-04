@@ -169,6 +169,22 @@ void AfeAudioProcessor::AudioProcessorTask() {
             if (res->vad_state == VAD_SPEECH && !is_speaking_) {
                 is_speaking_ = true;
                 vad_state_change_callback_(true);
+
+                // 将VAD缓存数据添加到输出缓冲区前端，解决开头数据丢失问题
+                if (res->vad_cache_size > 0 && output_callback_) {
+                    size_t cache_samples = res->vad_cache_size / sizeof(int16_t);
+
+                    // 清空 output_buffer_，确保只有 vad_cache + 当前 data
+                    if (!output_buffer_.empty()) {
+                        output_buffer_.clear();
+                        output_buffer_.reserve(cache_samples + frame_samples_);
+                    }
+
+                    // 将vad_cache数据插入到output_buffer_的前面
+                    output_buffer_.insert(output_buffer_.begin(),
+                                         res->vad_cache,
+                                         res->vad_cache + cache_samples);
+                }
             } else if (res->vad_state == VAD_SILENCE && is_speaking_) {
                 is_speaking_ = false;
                 vad_state_change_callback_(false);
@@ -201,10 +217,8 @@ void AfeAudioProcessor::AudioProcessorTask() {
 void AfeAudioProcessor::EnableDeviceAec(bool enable) {
     #if CONFIG_USE_DEVICE_AEC
         if (enable) {
-            ESP_LOGE(TAG, "AEC ENABLE ------");
             afe_iface_->enable_aec(afe_data_);
         } else {
-            ESP_LOGE(TAG, "AEC DISABLE ------");
             afe_iface_->disable_aec(afe_data_);
         }
         codec_->EnableInputReference(enable);

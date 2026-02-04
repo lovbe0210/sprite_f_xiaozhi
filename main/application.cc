@@ -395,10 +395,12 @@ void Application::Start() {
             return;
         }
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
-        Schedule([this]() {
-            AbortSpeaking(kAbortReasonVAD);
-            SetDeviceState(kDeviceStateListening);
-        });
+        AbortSpeaking(kAbortReasonVAD);
+        SetDeviceState(kDeviceStateListening);
+        // Schedule([this]() {
+        //     AbortSpeaking(kAbortReasonVAD);
+        //     SetDeviceState(kDeviceStateListening);
+        // });
     };
     audio_service_.SetCallbacks(callbacks);
 
