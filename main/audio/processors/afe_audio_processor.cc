@@ -180,10 +180,23 @@ void AfeAudioProcessor::AudioProcessorTask() {
                         output_buffer_.reserve(cache_samples + frame_samples_);
                     }
 
-                    // 将vad_cache数据插入到output_buffer_的前面
+                    // 对VAD缓存数据进行增益补偿，使其接近原始麦克风数据
+                    // MockAecAudioCodec在input_reference=true时使用>>8然后/256（相当于>>16）
+                    // 在input_reference=false时使用>>12，差异为16倍（2^16 / 2^12 = 16）
+                    // 所以需要乘以16来补偿增益差异
+                    std::vector<int16_t> compensated_cache(cache_samples);
+                    for (size_t i = 0; i < cache_samples; i++) {
+                        int32_t temp = (int32_t)res->vad_cache[i] * 16;
+                        // 限制在int16范围内防止溢出
+                        compensated_cache[i] = (temp > INT16_MAX) ? INT16_MAX :
+                                              (temp < INT16_MIN) ? INT16_MIN :
+                                              (int16_t)temp;
+                    }
+
+                    // 将补偿后的vad_cache数据插入到output_buffer_的前面
                     output_buffer_.insert(output_buffer_.begin(),
-                                         res->vad_cache,
-                                         res->vad_cache + cache_samples);
+                                         compensated_cache.begin(),
+                                         compensated_cache.end());
                 }
             } else if (res->vad_state == VAD_SILENCE && is_speaking_) {
                 is_speaking_ = false;

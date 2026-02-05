@@ -748,6 +748,7 @@ void Application::SetDeviceState(DeviceState state) {
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableAudioVadDetecting(false);
             audio_service_.EnableWakeWordDetection(true);
+            audio_service_.ResetDecoder();
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
