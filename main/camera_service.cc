@@ -279,9 +279,9 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
     result.success = true;
     result.image_id = image_id;
 
-    // 任务完成，等待一小段时间让系统整理内存
+    // 任务完成，等待一段时间让系统整理内存
     // 这样可以减少与语音识别等任务的内存竞争
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     // 7. 自动清理过期ID（如需要）
     if (params.auto_cleanup) {
