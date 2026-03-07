@@ -15,6 +15,7 @@
 #include "ota.h"
 #include "audio_service.h"
 #include "device_state_event.h"
+#include "camera_service.h"
 
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
@@ -66,6 +67,9 @@ public:
     AudioService& GetAudioService() { return audio_service_; }
     void DetectedAudioPlayIdle(const int received_bytes, const int played_bytes);
 
+    // 获取CameraService实例
+    CameraService& GetCameraService() { return *camera_service_; }
+
 private:
     Application();
     ~Application();
@@ -80,6 +84,7 @@ private:
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
     AudioService audio_service_;
+    std::unique_ptr<CameraService> camera_service_;   // 摄像头服务（内部管理ImageIdCache）
 
     bool has_server_time_ = false;
     bool aborted_ = false;

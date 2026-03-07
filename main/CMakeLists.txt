@@ -28,6 +28,8 @@ set(SOURCES "audio/audio_codec.cc"
             "settings.cc"
             "device_state_event.cc"
             "assets.cc"
+            "image_id_cache.cc"
+            "camera_service.cc"
             "main.cc"
             )
 

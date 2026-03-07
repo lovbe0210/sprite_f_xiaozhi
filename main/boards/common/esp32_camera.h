@@ -29,9 +29,11 @@ private:
         v4l2_pix_fmt_t format = 0;
     } frame_;
     v4l2_pix_fmt_t sensor_format_ = 0;
+    uint16_t sensor_width_ = 0;   // 保存相机实际宽度
+    uint16_t sensor_height_ = 0;  // 保存相机实际高度
+    size_t frame_allocated_len_ = 0;  // 已分配的帧缓冲区大小（用于内存重用）
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
-    uint16_t sensor_width_ = 0;
-    uint16_t sensor_height_ = 0;
+    // 用于旋转图像时使用 sensor_width_/sensor_height_
 #endif  // CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
     int video_fd_ = -1;
     bool streaming_on_ = false;
@@ -40,6 +42,7 @@ private:
     std::string explain_url_;
     std::string explain_token_;
     std::thread encoder_thread_;
+    SemaphoreHandle_t init_sem_ = nullptr;  // 初始化完成信号量
 
 public:
     Esp32Camera(const esp_video_init_config_t& config);
@@ -52,6 +55,10 @@ public:
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;
     virtual std::string Explain(const std::string& question);
+
+    // 获取和释放帧数据
+    virtual FrameData GetFrameData() override;
+    virtual void ReleaseFrameData() override;
 };
 
 #endif // ndef CONFIG_IDF_TARGET_ESP32

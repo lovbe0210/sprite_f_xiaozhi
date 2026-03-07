@@ -31,7 +31,7 @@ private:
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     Display* display_ = nullptr;
-    Esp32Camera* camera_;
+    Esp32Camera* camera_ = nullptr;
     Button boot_button_;
     Button touch_button_;
     Button volume_up_button_;
@@ -213,7 +213,7 @@ public:
         InitializeSsd1306Display();
         InitializeButtons();
         InitializeTools();
-        // InitializeCamera();  // 这个开发板没有摄像头模块，注释掉
+        InitializeCamera();
     }
 
     virtual Led* GetLed() override {
@@ -242,8 +242,7 @@ public:
     }
 
     virtual Camera* GetCamera() override {
-        // 这个开发板没有摄像头模块，返回 nullptr
-        return nullptr;
+        return camera_;
     }
 };
 

@@ -347,6 +347,22 @@ static bool encode_with_hw_jpeg(const uint8_t* src, size_t src_len, uint16_t wid
 }
 #endif // CONFIG_XIAOZHI_ENABLE_HARDWARE_JPEG_ENCODER
 
+// 静态变量：保持 JPEG 编码器打开状态，复用内部缓冲区以减少内存碎片化
+static jpeg_enc_handle_t g_sw_jpeg_enc_handle = NULL;
+static jpeg_enc_config_t g_sw_jpeg_enc_cfg = {};
+static bool g_sw_jpeg_enc_inited = false;
+
+// 预分配的输入/输出缓冲区，避免每次拍照都分配/释放大块内存
+static uint8_t* g_enc_in_buffer = NULL;
+static size_t g_enc_in_buffer_size = 0;
+static uint8_t* g_enc_out_buffer = NULL;
+static size_t g_enc_out_buffer_size = 0;
+
+// 预分配的颜色转换句柄，避免每次都 open/close
+static esp_imgfx_color_convert_handle_t g_color_convert_handle = nullptr;
+static bool g_color_convert_inited = false;
+static esp_imgfx_color_convert_cfg_t g_color_convert_cfg = {};
+
 static bool encode_with_esp_new_jpeg(const uint8_t* src, size_t src_len, uint16_t width, uint16_t height,
                                      v4l2_pix_fmt_t format, uint8_t quality, uint8_t** jpg_out, size_t* jpg_out_len,
                                      jpg_out_cb cb, void* cb_arg) {
@@ -357,12 +373,111 @@ static bool encode_with_esp_new_jpeg(const uint8_t* src, size_t src_len, uint16_
 
     jpeg_pixel_format_t enc_src_type = JPEG_PIXEL_FORMAT_RGB888;
     int enc_in_size = 0;
-    uint8_t* enc_in = convert_input_to_encoder_buf(src, width, height, format, &enc_src_type, &enc_in_size);
-    if (!enc_in) {
-        ESP_LOGE(TAG, "alloc/convert input failed");
+
+    // 根据输入格式设置编码器输入类型
+    if (format == V4L2_PIX_FMT_GREY) {
+        enc_src_type = JPEG_PIXEL_FORMAT_GRAY;
+    } else if (format == V4L2_PIX_FMT_YUYV) {
+        enc_src_type = JPEG_PIXEL_FORMAT_YCbYCr;
+    } else if (format == V4L2_PIX_FMT_RGB24) {
+        enc_src_type = JPEG_PIXEL_FORMAT_RGB888;
+    } else if (format == V4L2_PIX_FMT_RGB565 || format == V4L2_PIX_FMT_RGB565X) {
+        enc_src_type = JPEG_PIXEL_FORMAT_YCbYCr;  // RGB565 会转换为 YUYV
+    }
+
+    // 计算需要的输入缓冲区大小（不分配，只获取大小）
+    if (format == V4L2_PIX_FMT_GREY) {
+        enc_in_size = width * height;
+    } else if (format == V4L2_PIX_FMT_YUYV) {
+        enc_in_size = width * height * 2;
+    } else if (format == V4L2_PIX_FMT_RGB24) {
+        enc_in_size = width * height * 3;
+    } else if (format == V4L2_PIX_FMT_RGB565 || format == V4L2_PIX_FMT_RGB565X) {
+        enc_in_size = width * height * 2;
+    } else {
+        ESP_LOGE(TAG, "unsupported format: 0x%08x", format);
         return false;
     }
 
+    // 检查输入缓冲区是否需要重新分配
+    if (g_enc_in_buffer == NULL || g_enc_in_buffer_size < (size_t)enc_in_size) {
+        if (g_enc_in_buffer != NULL) {
+            jpeg_free_align(g_enc_in_buffer);
+            g_enc_in_buffer = NULL;
+        }
+        g_enc_in_buffer = (uint8_t*)jpeg_calloc_align(enc_in_size, 16);
+        if (!g_enc_in_buffer) {
+            ESP_LOGE(TAG, "alloc input buffer failed: need %d bytes", enc_in_size);
+            g_enc_in_buffer_size = 0;
+            return false;
+        }
+        g_enc_in_buffer_size = enc_in_size;
+        ESP_LOGI(TAG, "Allocated persistent input buffer: %zu bytes", g_enc_in_buffer_size);
+    }
+
+    // 转换输入数据到预分配的缓冲区
+    uint8_t* enc_in = g_enc_in_buffer;
+
+    // 执行转换（直接写入预分配的缓冲区）
+    if (format == V4L2_PIX_FMT_GREY) {
+        memcpy(enc_in, src, enc_in_size);
+    } else if (format == V4L2_PIX_FMT_YUYV) {
+        memcpy(enc_in, src, enc_in_size);
+    } else if (format == V4L2_PIX_FMT_RGB24) {
+        memcpy(enc_in, src, enc_in_size);
+    } else if (format == V4L2_PIX_FMT_RGB565 || format == V4L2_PIX_FMT_RGB565X) {
+        // 对于 RGB565，需要颜色转换到 YUYV
+        esp_imgfx_pixel_fmt_t in_pixel_fmt = (format == V4L2_PIX_FMT_RGB565) ?
+            ESP_IMGFX_PIXEL_FMT_RGB565_LE : ESP_IMGFX_PIXEL_FMT_RGB565_BE;
+
+        esp_imgfx_color_convert_cfg_t convert_cfg = {
+            .in_res = {.width = static_cast<int16_t>(width), .height = static_cast<int16_t>(height)},
+            .in_pixel_fmt = in_pixel_fmt,
+            .out_pixel_fmt = ESP_IMGFX_PIXEL_FMT_YUYV,
+            .color_space_std = ESP_IMGFX_COLOR_SPACE_STD_BT601,
+        };
+
+        // 检查颜色转换句柄是否需要重新打开
+        bool need_reopen_convert = !g_color_convert_inited ||
+                                   memcmp(&g_color_convert_cfg, &convert_cfg, sizeof(esp_imgfx_color_convert_cfg_t)) != 0;
+
+        if (need_reopen_convert) {
+            // 关闭旧的句柄
+            if (g_color_convert_handle != nullptr) {
+                esp_imgfx_color_convert_close(g_color_convert_handle);
+                g_color_convert_handle = nullptr;
+                g_color_convert_inited = false;
+            }
+
+            // 打开新的句柄
+            esp_imgfx_err_t err = esp_imgfx_color_convert_open(&convert_cfg, &g_color_convert_handle);
+            if (err != ESP_IMGFX_ERR_OK || g_color_convert_handle == nullptr) {
+                ESP_LOGE(TAG, "esp_imgfx_color_convert_open failed");
+                return false;
+            }
+
+            // 保存配置
+            g_color_convert_cfg = convert_cfg;
+            g_color_convert_inited = true;
+        }
+
+        esp_imgfx_data_t convert_input_data = {
+            .data = const_cast<uint8_t*>(src),
+            .data_len = static_cast<uint32_t>(enc_in_size),
+        };
+        esp_imgfx_data_t convert_output_data = {
+            .data = enc_in,
+            .data_len = static_cast<uint32_t>(enc_in_size),
+        };
+        esp_imgfx_err_t err = esp_imgfx_color_convert_process(g_color_convert_handle, &convert_input_data, &convert_output_data);
+
+        if (err != ESP_IMGFX_ERR_OK) {
+            ESP_LOGE(TAG, "esp_imgfx_color_convert_process failed");
+            return false;
+        }
+    }
+
+    // 构建当前配置
     jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
     cfg.width = width;
     cfg.height = height;
@@ -372,41 +487,64 @@ static bool encode_with_esp_new_jpeg(const uint8_t* src, size_t src_len, uint16_
     cfg.rotate = JPEG_ROTATE_0D;
     cfg.task_enable = false;
 
-    jpeg_enc_handle_t h = NULL;
-    jpeg_error_t ret = jpeg_enc_open(&cfg, &h);
-    if (ret != JPEG_ERR_OK) {
-        jpeg_free_align(enc_in);
-        ESP_LOGE(TAG, "jpeg_enc_open failed: %d", (int)ret);
-        return false;
+    // 检查配置是否变化，如果变化则重新打开编码器
+    bool need_reopen = !g_sw_jpeg_enc_inited ||
+                       memcmp(&g_sw_jpeg_enc_cfg, &cfg, sizeof(jpeg_enc_config_t)) != 0;
+
+    if (need_reopen) {
+        // 关闭旧的编码器
+        if (g_sw_jpeg_enc_handle != NULL) {
+            jpeg_enc_close(g_sw_jpeg_enc_handle);
+            g_sw_jpeg_enc_handle = NULL;
+            g_sw_jpeg_enc_inited = false;
+        }
+
+        // 打开新的编码器
+        jpeg_error_t ret = jpeg_enc_open(&cfg, &g_sw_jpeg_enc_handle);
+        if (ret != JPEG_ERR_OK) {
+            ESP_LOGE(TAG, "jpeg_enc_open failed: %d", (int)ret);
+            return false;
+        }
+
+        // 保存配置
+        g_sw_jpeg_enc_cfg = cfg;
+        g_sw_jpeg_enc_inited = true;
     }
 
     // 估算输出缓冲区：宽高的 1.5 倍 + 64KB
     size_t out_cap = (size_t)width * (size_t)height * 3 / 2 + 64 * 1024;
     if (out_cap < 128 * 1024)
         out_cap = 128 * 1024;
-    uint8_t* outbuf = (uint8_t*)malloc_psram(out_cap);
-    if (!outbuf) {
-        jpeg_enc_close(h);
-        jpeg_free_align(enc_in);
-        ESP_LOGE(TAG, "alloc out buffer failed");
-        return false;
+
+    // 检查输出缓冲区是否需要重新分配
+    if (g_enc_out_buffer == NULL || g_enc_out_buffer_size < out_cap) {
+        if (g_enc_out_buffer != NULL) {
+            free(g_enc_out_buffer);
+            g_enc_out_buffer = NULL;
+        }
+        g_enc_out_buffer = (uint8_t*)malloc_psram(out_cap);
+        if (!g_enc_out_buffer) {
+            ESP_LOGE(TAG, "alloc output buffer failed: need %zu bytes", out_cap);
+            g_enc_out_buffer_size = 0;
+            return false;
+        }
+        g_enc_out_buffer_size = out_cap;
+        ESP_LOGI(TAG, "Allocated persistent output buffer: %zu bytes", g_enc_out_buffer_size);
     }
 
     int out_len = 0;
-    ret = jpeg_enc_process(h, enc_in, enc_in_size, outbuf, (int)out_cap, &out_len);
-    jpeg_enc_close(h);
-    jpeg_free_align(enc_in);
+    jpeg_error_t ret = jpeg_enc_process(g_sw_jpeg_enc_handle, enc_in, enc_in_size,
+                                         g_enc_out_buffer, (int)g_enc_out_buffer_size, &out_len);
 
     if (ret != JPEG_ERR_OK) {
-        free(outbuf);
         ESP_LOGE(TAG, "jpeg_enc_process failed: %d", (int)ret);
         return false;
     }
 
     if (cb) {
-        cb(cb_arg, 0, outbuf, (size_t)out_len);
+        cb(cb_arg, 0, g_enc_out_buffer, (size_t)out_len);
         cb(cb_arg, 1, NULL, 0);  // 结束信号
-        free(outbuf);
+        // 注意：不释放 g_enc_out_buffer，保留供下次使用
         if (jpg_out)
             *jpg_out = NULL;
         if (jpg_out_len)
@@ -415,12 +553,17 @@ static bool encode_with_esp_new_jpeg(const uint8_t* src, size_t src_len, uint16_
     }
 
     if (jpg_out && jpg_out_len) {
-        *jpg_out = outbuf;
+        // 调用者需要返回的内存，分配一个新的副本
+        *jpg_out = (uint8_t*)malloc_psram(out_len);
+        if (!*jpg_out) {
+            ESP_LOGE(TAG, "alloc output copy failed: need %d bytes", out_len);
+            return false;
+        }
+        memcpy(*jpg_out, g_enc_out_buffer, out_len);
         *jpg_out_len = (size_t)out_len;
         return true;
     }
 
-    free(outbuf);
     return true;
 }
 

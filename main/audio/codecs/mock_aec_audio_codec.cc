@@ -242,7 +242,19 @@ int MockAecAudioCodec::Write(const int16_t* data, int samples) {
         time_us_write_ = esp_timer_get_time(); // 获取微秒级时间戳
     }
     size_t bytes_written;
-    ESP_ERROR_CHECK(i2s_channel_write(tx_handle_, buffer.data(), samples * sizeof(int32_t), &bytes_written, portMAX_DELAY));
+
+    // 检查 TX 通道是否有效并已启用
+    if (tx_handle_ == nullptr) {
+        ESP_LOGW(TAG, "TX handle is null, skipping write");
+        return 0;
+    }
+
+    esp_err_t ret = i2s_channel_write(tx_handle_, buffer.data(), samples * sizeof(int32_t), &bytes_written, portMAX_DELAY);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "i2s_channel_write failed: 0x%x, skipping this write", ret);
+        return 0;
+    }
+
     return bytes_written / sizeof(int32_t);
 }
 

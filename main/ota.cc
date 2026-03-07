@@ -182,12 +182,27 @@ esp_err_t Ota::CheckVersion() {
         ESP_LOGI(TAG, "No websocket section found!");
     }
 
-    // Parse and save api_server field
+    // Parse and save api_server field (as object with url and token)
     cJSON *api_server = cJSON_GetObjectItem(root, "api_server");
-    if (cJSON_IsString(api_server) && api_server->valuestring != nullptr) {
-        Settings settings("wifi", true);
-        settings.SetString("api_server", api_server->valuestring);
-        ESP_LOGI(TAG, "API server: %s", api_server->valuestring);
+    if (cJSON_IsObject(api_server)) {
+        Settings settings("api_server", true);
+
+        // Parse url field
+        cJSON *url = cJSON_GetObjectItem(api_server, "url");
+        if (cJSON_IsString(url) && url->valuestring != nullptr) {
+            settings.SetString("url", url->valuestring);
+            ESP_LOGI(TAG, "API server url: %s", url->valuestring);
+        }
+
+        // Parse token field
+        cJSON *token = cJSON_GetObjectItem(api_server, "token");
+        if (cJSON_IsString(token) && token->valuestring != nullptr && strlen(token->valuestring) > 0) {
+            settings.SetString("token", token->valuestring);
+            ESP_LOGI(TAG, "API server token: %s", token->valuestring);
+        } else {
+            // Clear token if not present
+            settings.EraseKey("token");
+        }
     } else {
         ESP_LOGI(TAG, "No api_server field in response");
     }

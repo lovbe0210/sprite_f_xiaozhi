@@ -95,8 +95,16 @@ static void log_available_video_devices() {
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
 
 Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
+    // 创建初始化完成信号量（计数为0）
+    init_sem_ = xSemaphoreCreateBinary();
+    if (init_sem_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create init semaphore");
+        return;
+    }
+
     if (esp_video_init(&config) != ESP_OK) {
         ESP_LOGE(TAG, "esp_video_init failed");
+        xSemaphoreGive(init_sem_);  // 失败也要发出信号，避免死锁
         return;
     }
 
@@ -265,9 +273,13 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
     }
 
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
+    sensor_width_ = setformat.fmt.pix.width;
+    sensor_height_ = setformat.fmt.pix.height;
     frame_.width = setformat.fmt.pix.height;
     frame_.height = setformat.fmt.pix.width;
 #else
+    sensor_width_ = setformat.fmt.pix.width;
+    sensor_height_ = setformat.fmt.pix.height;
     frame_.width = setformat.fmt.pix.width;
     frame_.height = setformat.fmt.pix.height;
 #endif
@@ -317,14 +329,10 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
         }
     }
 
-    int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(video_fd_, VIDIOC_STREAMON, &type) != 0) {
-        ESP_LOGE(TAG, "VIDIOC_STREAMON failed");
-        close(video_fd_);
-        video_fd_ = -1;
-        sensor_format_ = 0;
-        return;
-    }
+    // 不在构造函数中启动流，改为按需启动（在第一次拍照时启动）
+    // 这样可以避免相机 DMA 中断与音频处理冲突
+    streaming_on_ = false;
+    ESP_LOGI(TAG, "Camera initialized, stream will be started on first capture");
 
 #ifdef CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE
     // 当启用 ISP 时，ISP 需要一些照片来初始化参数，因此开启后后台拍摄5s照片并丢弃
@@ -351,12 +359,17 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
             ESP_LOGI(TAG, "Camera init success, captured %d frames in %dms", capture_count,
                      (xTaskGetTickCount() - start) * portTICK_PERIOD_MS);
             self->streaming_on_ = true;
+            // 发出初始化完成信号
+            if (self->init_sem_ != nullptr) {
+                xSemaphoreGive(self->init_sem_);
+            }
             vTaskDelete(NULL);
         },
         "CameraInitTask", 4096, this, 5, nullptr);
 #else
-    ESP_LOGI(TAG, "Camera init success");
-    streaming_on_ = true;
+    // 对于非ISP设备，改为按需启动流（在第一次拍照时启动）
+    // 这样可以避免相机 DMA 中断与音频处理冲突
+    ESP_LOGI(TAG, "Camera initialized (non-ISP), stream will be started on first capture");
 #endif  // CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE
 }
 
@@ -376,6 +389,12 @@ Esp32Camera::~Esp32Camera() {
     }
     sensor_format_ = 0;
     esp_video_deinit();
+
+    // 删除初始化信号量
+    if (init_sem_ != nullptr) {
+        vSemaphoreDelete(init_sem_);
+        init_sem_ = nullptr;
+    }
 }
 
 void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token) {
@@ -402,20 +421,45 @@ bool Esp32Camera::Capture() {
         }
         if (i == 2) {
             // 保存帧副本到PSRAM
-            if (frame_.data) {
-                heap_caps_free(frame_.data);
-                frame_.data = nullptr;
-                frame_.format = 0;
-            }
             frame_.len = buf.bytesused;
-            frame_.data = (uint8_t*)heap_caps_malloc(frame_.len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (!frame_.data) {
-                ESP_LOGE(TAG, "alloc frame copy failed: need allocate %d bytes", buf.bytesused);
-                if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
-                    ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+
+            // 尝试重用之前分配的内存（避免内存碎片化）
+            if (frame_.data == nullptr || frame_.len > frame_allocated_len_) {
+                // 需要分配或重新分配内存
+                if (frame_.data != nullptr) {
+                    heap_caps_free(frame_.data);
+                    frame_.data = nullptr;
                 }
-                return false;
+
+                // 分配内存（留一点余量以适应不同大小的帧）
+                frame_allocated_len_ = frame_.len + 4096;  // 多分配 4KB 作为余量
+
+                // 尝试多种方式分配内存
+                // 方式1：SPIRAM + DMA + 32BIT（推荐）
+                frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
+                    MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
+
+                // 方式2：SPIRAM + 8BIT（回退）
+                if (frame_.data == nullptr) {
+                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                }
+
+                // 方式3：任何可用的内存（最后的回退）
+                if (frame_.data == nullptr) {
+                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, MALLOC_CAP_DEFAULT);
+                }
+
+                if (!frame_.data) {
+                    ESP_LOGE(TAG, "alloc frame copy failed: need allocate %d bytes (PSRAM may be fragmented)", frame_allocated_len_);
+                    frame_allocated_len_ = 0;
+                    if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                        ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+                    }
+                    return false;
+                }
             }
+            // 否则重用之前分配的内存
 
 #ifdef CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE
             ESP_LOGW(TAG, "mmap_buffers_[buf.index].length = %d, sensor_width = %d, sensor_height = %d",
@@ -839,6 +883,30 @@ bool Esp32Camera::Capture() {
     return true;
 }
 
+FrameData Esp32Camera::GetFrameData() {
+    FrameData fd;
+    fd.data = frame_.data;
+    fd.len = frame_.len;
+    fd.width = frame_.width;
+    fd.height = frame_.height;
+    fd.format = frame_.format;
+    return fd;
+}
+
+void Esp32Camera::ReleaseFrameData() {
+    // 不释放帧缓冲区内存，保留供下次拍照复用
+    // 这样可以避免内存碎片化
+    if (frame_.data) {
+        ESP_LOGI(TAG, "Releasing frame data (keeping buffer allocated): %p, %zu bytes", frame_.data, frame_.len);
+        // 注意：不调用 heap_caps_free，保留内存供下次使用
+    }
+    // 清空帧信息，但保留指针
+    frame_.len = 0;
+    frame_.width = 0;
+    frame_.height = 0;
+    frame_.format = 0;
+}
+
 bool Esp32Camera::SetHMirror(bool enabled) {
     if (video_fd_ < 0)
         return false;
@@ -877,14 +945,51 @@ bool Esp32Camera::SetVFlip(bool enabled) {
  * 只拍照，不做照片预览和显示
  */
 bool Esp32Camera::CaptureRawFrame() {
+    ESP_LOGI(TAG, "CaptureRawFrame: starting capture, streaming_on=%d, video_fd=%d",
+             streaming_on_, video_fd_);
+
+    // 如果之前拍过照，等待一下让系统释放内存
+    if (streaming_on_ && frame_.data != nullptr) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
 
-    if (!streaming_on_ || video_fd_ < 0) {
-        return false;
+    // 按需启动流：第一次拍照时才启动
+    if (!streaming_on_) {
+        if (video_fd_ < 0) {
+            ESP_LOGE(TAG, "Camera not initialized");
+            return false;
+        }
+
+        ESP_LOGI(TAG, "Starting camera stream for first capture");
+        int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if (ioctl(video_fd_, VIDIOC_STREAMON, &type) != 0) {
+            ESP_LOGE(TAG, "VIDIOC_STREAMON failed");
+            return false;
+        }
+
+        // 等待 DMA 稳定（丢弃前几帧）
+        vTaskDelay(pdMS_TO_TICKS(200));
+
+        // 丢弃前3帧确保 DMA 稳定
+        for (int i = 0; i < 3; i++) {
+            struct v4l2_buffer buf = {};
+            buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            buf.memory = V4L2_MEMORY_MMAP;
+            if (ioctl(video_fd_, VIDIOC_DQBUF, &buf) == 0) {
+                ioctl(video_fd_, VIDIOC_QBUF, &buf);
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
+        streaming_on_ = true;
+        ESP_LOGI(TAG, "Camera stream started and stabilized");
     }
 
+    ESP_LOGI(TAG, "CaptureRawFrame: starting DQBUF loop");
     for (int i = 0; i < 3; i++) {
         struct v4l2_buffer buf = {};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -895,20 +1000,48 @@ bool Esp32Camera::CaptureRawFrame() {
         }
         if (i == 2) {
             // 保存帧副本到PSRAM
-            if (frame_.data) {
-                heap_caps_free(frame_.data);
-                frame_.data = nullptr;
-                frame_.format = 0;
-            }
             frame_.len = buf.bytesused;
-            frame_.data = (uint8_t*)heap_caps_malloc(frame_.len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (!frame_.data) {
-                ESP_LOGE(TAG, "alloc frame copy failed: need allocate %d bytes", buf.bytesused);
-                if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
-                    ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+
+            // 预分配并复用帧缓冲区，避免每次拍照都分配/释放 614KB 内存
+            if (frame_.data == nullptr || frame_allocated_len_ < frame_.len) {
+                // 需要分配或重新分配内存
+                if (frame_.data != nullptr) {
+                    heap_caps_free(frame_.data);
+                    frame_.data = nullptr;
                 }
-                return false;
+
+                // 分配内存（留一点余量以适应不同大小的帧）
+                frame_allocated_len_ = frame_.len + 4096;  // 多分配 4KB 作为余量
+
+                // 分配内存
+                frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
+                    MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
+
+                if (frame_.data == nullptr) {
+                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                }
+
+                if (frame_.data == nullptr) {
+                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, MALLOC_CAP_DEFAULT);
+                }
+
+                if (!frame_.data) {
+                    ESP_LOGE(TAG, "alloc frame buffer failed: need allocate %d bytes", frame_allocated_len_);
+                    frame_allocated_len_ = 0;
+                    if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                        ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+                    }
+                    return false;
+                }
+
+                ESP_LOGI(TAG, "Allocated persistent frame buffer: %zu bytes", frame_allocated_len_);
             }
+            // 否则重用之前分配的内存（不释放）
+
+            // 设置帧尺寸和格式（从保存的传感器尺寸获取）
+            frame_.width = sensor_width_;
+            frame_.height = sensor_height_;
 
             switch (sensor_format_) {
                 case V4L2_PIX_FMT_RGB565:

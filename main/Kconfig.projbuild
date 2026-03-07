@@ -438,6 +438,24 @@ menu "Camera Configuration"
             comment "For 180° rotation, use HFlip + VFlip instead of this option"
         endchoice
     endif
+
+    config CAMERA_ACTIVE_INTERVAL_MS
+        int "Active Mode Interval (ms)"
+        range 1000 60000
+        default 5000
+        help
+            Camera capture interval in active mode (idle state).
+            Lower values = more responsive but higher power/CPU.
+            Default 5000ms (5 seconds).
+
+    config CAMERA_PASSIVE_DELAY_MS
+        int "Passive Mode Delay (ms)"
+        range 0 5000
+        default 500
+        help
+            Delay after state change before capture in passive mode.
+            Default 500ms (avoid wake word interference).
+
 endmenu
 
 menu "TAIJIPAI_S3_CONFIG"

@@ -397,12 +397,40 @@ void Application::Start() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
         AbortSpeaking(kAbortReasonVAD);
         SetDeviceState(kDeviceStateListening);
-        // Schedule([this]() {
-        //     AbortSpeaking(kAbortReasonVAD);
-        //     SetDeviceState(kDeviceStateListening);
-        // });
     };
     audio_service_.SetCallbacks(callbacks);
+
+    // Initialize CameraService（内部管理ImageIdCache）
+    auto* camera = board.GetCamera();
+    if (camera != nullptr) {
+        camera_service_ = std::make_unique<CameraService>();
+        camera_service_->Initialize(camera);  // ImageIdCache 由 CameraService 内部创建
+
+        // 配置CameraService（只保留必要的用户可调配置）
+        CameraService::Config camera_config;
+        camera_config.active_interval_ms = CONFIG_CAMERA_ACTIVE_INTERVAL_MS;
+        camera_config.passive_delay_ms = CONFIG_CAMERA_PASSIVE_DELAY_MS;
+
+        camera_service_->SetConfig(camera_config);
+
+        // 注册状态变化回调
+        DeviceStateEventManager::GetInstance().RegisterStateChangeCallback(
+            [this](DeviceState prev, DeviceState curr) {
+                if (camera_service_) {
+                    camera_service_->OnDeviceStateChanged(prev, curr);
+                }
+            }
+        );
+
+        // 启动CameraService
+        camera_service_->Start();
+
+        ESP_LOGI(TAG, "CameraService initialized and started");
+        ESP_LOGI(TAG, "  Active interval: %d ms", camera_config.active_interval_ms);
+        ESP_LOGI(TAG, "  Passive delay: %d ms", camera_config.passive_delay_ms);
+    } else {
+        ESP_LOGW(TAG, "Camera not available");
+    }
 
     // Start the main event loop task with priority 3
     xTaskCreate([](void* arg) {
@@ -765,6 +793,28 @@ void Application::SetDeviceState(DeviceState state) {
             audio_service_.EnableWakeWordDetection(false);
             audio_service_.EnableAudioVadDetecting(false);
             audio_service_.EnableVoiceProcessing(true);
+
+            // 异步发送image_id（等待拍照完成后）
+            // Schedule([this]() {
+            //     // 等待500ms，让CameraService完成拍照
+            //     vTaskDelay(pdMS_TO_TICKS(500));
+
+            //     // 从CameraService获取最新的listening image_id
+            //     std::string image_id = camera_service_ ? camera_service_->GetLatestImageId("listening") : "";
+
+            //     if (!image_id.empty()) {
+            //         // 发送附带image_id的消息
+            //         std::string message = "{\"session_id\":\"" + protocol_->session_id() + "\"";
+            //         message += ",\"type\":\"image_id\"";
+            //         message += ",\"context\":\"listening\"";
+            //         message += ",\"image_id\":\"" + image_id + "\"";
+            //         message += "}";
+            //         protocol_->SendText(message);
+            //         ESP_LOGI(TAG, "Sent listening image_id: %s", image_id.c_str());
+            //     } else {
+            //         ESP_LOGW(TAG, "No listening image_id available");
+            //     }
+            // });
             break;
         case kDeviceStateSpeaking:
             display->SetStatus(Lang::Strings::SPEAKING);
@@ -775,6 +825,28 @@ void Application::SetDeviceState(DeviceState state) {
             audio_service_.EnableWakeWordDetection(false);
             audio_service_.EnableDeviceAec(true);
             audio_service_.EnableAudioVadDetecting(true);
+
+            // 异步发送image_id（等待拍照完成后）
+            // Schedule([this]() {
+            //     // 等待200ms，让CameraService完成拍照
+            //     vTaskDelay(pdMS_TO_TICKS(200));
+
+            //     // 从CameraService获取最新的speaking image_id
+            //     std::string image_id = camera_service_ ? camera_service_->GetLatestImageId("speaking") : "";
+
+            //     if (!image_id.empty()) {
+            //         // 发送附带image_id的消息
+            //         std::string message = "{\"session_id\":\"" + protocol_->session_id() + "\"";
+            //         message += ",\"type\":\"image_id\"";
+            //         message += ",\"context\":\"speaking\"";
+            //         message += ",\"image_id\":\"" + image_id + "\"";
+            //         message += "}";
+            //         protocol_->SendText(message);
+            //         ESP_LOGI(TAG, "Sent speaking image_id: %s", image_id.c_str());
+            //     } else {
+            //         ESP_LOGW(TAG, "No speaking image_id available");
+            //     }
+            // });
             break;
         default:
             // Do nothing
