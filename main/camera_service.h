@@ -64,6 +64,10 @@ public:
         int active_interval_ms = 5000;     ///< 主动模式间隔（毫秒）
         int passive_delay_ms = 500;        ///< 被动模式延迟（毫秒）
 
+        // 多帧拍摄配置
+        int multi_frame_count = 5;          ///< 连续拍摄帧数（建议3-5帧）
+        int multi_frame_interval_ms = 50;   ///< 帧间隔（毫秒，建议30-100ms）
+
         Config() = default;
     };
 

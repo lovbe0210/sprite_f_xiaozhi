@@ -14,6 +14,34 @@ static const char* TAG = "CameraService";
 // 静态缓冲区：复用JPEG数据向量，避免每次拍照都分配/释放内存
 static std::vector<uint8_t> g_jpeg_data_buffer;
 
+// 串行编码函数：直接编码一帧并返回JPEG数据
+static bool EncodeFrameToJpeg(const uint8_t* frame_data, size_t frame_len,
+                              uint16_t width, uint16_t height,
+                              v4l2_pix_fmt_t format, int quality,
+                              std::vector<uint8_t>& out_jpeg) {
+    out_jpeg.clear();
+
+    bool jpeg_ok = image_to_jpeg_cb(
+        const_cast<uint8_t*>(frame_data), frame_len,
+        width, height,
+        format, quality,
+        [](void* arg, size_t index, const void* data, size_t len) -> size_t {
+            auto* jpeg_vec = static_cast<std::vector<uint8_t>*>(arg);
+            if (data != nullptr && len > 0) {
+                if (index == 0) {
+                    jpeg_vec->reserve(len * 2);
+                }
+                const uint8_t* byte_data = static_cast<const uint8_t*>(data);
+                jpeg_vec->insert(jpeg_vec->end(), byte_data, byte_data + len);
+            }
+            return len;
+        },
+        &out_jpeg
+    );
+
+    return jpeg_ok && !out_jpeg.empty();
+}
+
 CameraService::CameraService() {
     ESP_LOGI(TAG, "CameraService created");
 }
@@ -146,8 +174,9 @@ CameraService::TaskResult CameraService::ExecuteTask(const TaskParams& params) {
 void CameraService::SetConfig(const Config& config) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_ = config;
-    ESP_LOGI(TAG, "Config updated: active_interval=%d, passive_delay=%d",
-            config.active_interval_ms, config.passive_delay_ms);
+    ESP_LOGI(TAG, "Config updated: active_interval=%d, passive_delay=%d, multi_frame_count=%d, multi_frame_interval=%d",
+            config.active_interval_ms, config.passive_delay_ms,
+            config.multi_frame_count, config.multi_frame_interval_ms);
 }
 
 CameraService::Config CameraService::GetConfig() const {
@@ -185,31 +214,68 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
     // 获取 Esp32Camera 实例以访问循环缓冲区
     auto* esp32_camera = static_cast<Esp32Camera*>(camera_);
 
-    // 连续拍摄5帧（JPEG编码本身约150ms，无需额外延迟）
-    for (int i = 0; i < 5; i++) {
+    // 使用串行编码方案：捕获->编码->存储，循环多次
+    const int frame_count = config_.multi_frame_count;
+    const int frame_interval_ms = config_.multi_frame_interval_ms;
+
+    ESP_LOGI(TAG, "Starting serial capture: %d frames, %dms interval", frame_count, frame_interval_ms);
+
+    int successful_frames = 0;
+
+    // 循环捕获多帧，每次捕获后立即编码并存储
+    for (int i = 0; i < frame_count; i++) {
+        // 捕获原始帧
         if (!camera_->CaptureRawFrame()) {
-            ESP_LOGW(TAG, "Frame %d capture failed, continuing...", i);
+            ESP_LOGW(TAG, "Frame %d capture failed", i);
+            continue;
         }
+
+        // 获取帧数据
+        FrameData fd = camera_->GetFrameData();
+        if (fd.data == nullptr || fd.len == 0) {
+            ESP_LOGW(TAG, "Frame %d has no data", i);
+            camera_->ReleaseFrameData();
+            continue;
+        }
+
+        // 编码为JPEG（使用静态缓冲区避免重复分配）
+        g_jpeg_data_buffer.clear();
+        bool encode_ok = EncodeFrameToJpeg(fd.data, fd.len, fd.width, fd.height,
+                                          (v4l2_pix_fmt_t)fd.format, 85,
+                                          g_jpeg_data_buffer);
+
+        camera_->ReleaseFrameData();
+
+        if (encode_ok && !g_jpeg_data_buffer.empty()) {
+            // 存入循环缓冲区
+            esp32_camera->GetJpegCircularBuffer().AddFrame(
+                g_jpeg_data_buffer.data(), g_jpeg_data_buffer.size());
+            successful_frames++;
+            ESP_LOGI(TAG, "Frame %d encoded: %u bytes", i, (unsigned int)g_jpeg_data_buffer.size());
+        } else {
+            ESP_LOGW(TAG, "Frame %d encoding failed", i);
+        }
+
     }
 
-    ESP_LOGI(TAG, "Captured 5 frames for circular buffer");
+    ESP_LOGI(TAG, "Serial capture completed: %d/%d frames successful", successful_frames, frame_count);
 
-    // 3. 从循环缓冲区获取最近的5帧 JPEG 数据
+    // 3. 从循环缓冲区获取最近的帧 JPEG 数据
     JpegFrameBuffer frames[5];
-    size_t frame_count = esp32_camera->GetJpegCircularBuffer().GetRecentFrames(5, frames);
+    size_t actual_frame_count = esp32_camera->GetJpegCircularBuffer().GetRecentFrames(5, frames);
 
-    if (frame_count == 0) {
+    if (actual_frame_count == 0) {
         result.success = false;
         result.error_message = "No frames in circular buffer";
         stats_.failed_captures++;
         return result;
     }
 
-    ESP_LOGI(TAG, "Got %u frames from circular buffer", (unsigned int)frame_count);
+    ESP_LOGI(TAG, "Got %u frames from circular buffer", (unsigned int)actual_frame_count);
 
     // 4. HTTP上传多帧，获取image_id
     std::string image_id;
-    if (!UploadMultipleFramesToServer(frames, frame_count, params.context, image_id)) {
+    if (!UploadMultipleFramesToServer(frames, actual_frame_count, params.context, image_id)) {
         result.success = false;
         result.error_message = "Failed to upload to server";
         stats_.failed_captures++;
@@ -234,7 +300,7 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
             stats_.passive_mode_captures++;
         }
 
-        ESP_LOGI(TAG, "Task completed: image_id=%s (%u frames)", image_id.c_str(), (unsigned int)frame_count);
+        ESP_LOGI(TAG, "Task completed: image_id=%s (%u frames)", image_id.c_str(), (unsigned int)actual_frame_count);
     }
 
     stats_.total_captures++;
