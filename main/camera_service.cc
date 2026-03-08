@@ -185,14 +185,10 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
     // 获取 Esp32Camera 实例以访问循环缓冲区
     auto* esp32_camera = static_cast<Esp32Camera*>(camera_);
 
-    // 连续拍摄5帧（JPEG编码本身约150ms，无需额外长延迟）
+    // 连续拍摄5帧（JPEG编码本身约150ms，无需额外延迟）
     for (int i = 0; i < 5; i++) {
         if (!camera_->CaptureRawFrame()) {
             ESP_LOGW(TAG, "Frame %d capture failed, continuing...", i);
-        }
-        // 只给短暂延迟让系统调度，JPEG编码本身已占大部分时间
-        if (i < 4) {  // 最后一次不需要等待
-            vTaskDelay(pdMS_TO_TICKS(10));  // 10ms间隔（原200ms）
         }
     }
 
