@@ -94,6 +94,97 @@ static void log_available_video_devices() {
 #define CAM_PRINT_FOURCC(pixelformat) (void)0;
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
 
+// ============================================================================
+// JpegCircularBuffer 实现
+// ============================================================================
+
+bool JpegCircularBuffer::Initialize() {
+    // 为每个缓冲区分配内存（从 PSRAM 分配）
+    for (size_t i = 0; i < CAPACITY; i++) {
+        buffers_[i].data = (uint8_t*)heap_caps_malloc(MAX_JPEG_SIZE,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (buffers_[i].data == nullptr) {
+            ESP_LOGE(TAG, "Failed to allocate JPEG circular buffer[%u], size=%u",
+                     (unsigned int)i, (unsigned int)MAX_JPEG_SIZE);
+            // 释放已分配的内存
+            for (size_t j = 0; j < i; j++) {
+                heap_caps_free(buffers_[j].data);
+                buffers_[j].data = nullptr;
+            }
+            return false;
+        }
+        buffers_[i].capacity = MAX_JPEG_SIZE;
+        buffers_[i].len = 0;
+        buffers_[i].valid = false;
+    }
+    ESP_LOGI(TAG, "JPEG circular buffer initialized: %u frames x %u bytes = %u KB total",
+             (unsigned int)CAPACITY, (unsigned int)MAX_JPEG_SIZE, (unsigned int)((CAPACITY * MAX_JPEG_SIZE) / 1024));
+    return true;
+}
+
+void JpegCircularBuffer::Cleanup() {
+    for (size_t i = 0; i < CAPACITY; i++) {
+        if (buffers_[i].data != nullptr) {
+            heap_caps_free(buffers_[i].data);
+            buffers_[i].data = nullptr;
+        }
+        buffers_[i].capacity = 0;
+        buffers_[i].len = 0;
+        buffers_[i].valid = false;
+    }
+    write_index_ = 0;
+    count_ = 0;
+}
+
+bool JpegCircularBuffer::AddFrame(const uint8_t* data, size_t len) {
+    if (data == nullptr || len == 0) {
+        return false;
+    }
+    if (len > MAX_JPEG_SIZE) {
+        ESP_LOGW(TAG, "JPEG frame too large: %u bytes (max %u)", (unsigned int)len, (unsigned int)MAX_JPEG_SIZE);
+        len = MAX_JPEG_SIZE;
+    }
+
+    // 复制数据到当前写入位置
+    JpegFrameBuffer& buf = buffers_[write_index_];
+    memcpy(buf.data, data, len);
+    buf.len = len;
+    buf.valid = true;
+
+    // 更新写入位置和计数
+    write_index_ = (write_index_ + 1) % CAPACITY;
+    if (count_ < CAPACITY) {
+        count_++;
+    }
+
+    return true;
+}
+
+size_t JpegCircularBuffer::GetRecentFrames(size_t count, JpegFrameBuffer* out_frames) {
+    if (out_frames == nullptr || count == 0) {
+        return 0;
+    }
+
+    size_t actual_count = (count > count_) ? count_ : count;
+    if (actual_count == 0) {
+        return 0;
+    }
+
+    // 从最旧的帧开始复制
+    size_t start_index = (write_index_ - count_ + CAPACITY) % CAPACITY;
+
+    for (size_t i = 0; i < actual_count; i++) {
+        size_t src_index = (start_index + i) % CAPACITY;
+        out_frames[i] = buffers_[src_index];  // 浅拷贝（只拷贝结构，data指针指向原数据）
+    }
+
+    return actual_count;
+}
+
+// ============================================================================
+// Esp32Camera 实现
+// ============================================================================
+
 Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
     // 创建初始化完成信号量（计数为0）
     init_sem_ = xSemaphoreCreateBinary();
@@ -371,6 +462,11 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
     // 这样可以避免相机 DMA 中断与音频处理冲突
     ESP_LOGI(TAG, "Camera initialized (non-ISP), stream will be started on first capture");
 #endif  // CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE
+
+    // 初始化 JPEG 循环缓冲区
+    if (!jpeg_circular_buffer_.Initialize()) {
+        ESP_LOGE(TAG, "Failed to initialize JPEG circular buffer");
+    }
 }
 
 Esp32Camera::~Esp32Camera() {
@@ -389,6 +485,9 @@ Esp32Camera::~Esp32Camera() {
     }
     sensor_format_ = 0;
     esp_video_deinit();
+
+    // 清理 JPEG 循环缓冲区
+    jpeg_circular_buffer_.Cleanup();
 
     // 删除初始化信号量
     if (init_sem_ != nullptr) {
@@ -1101,6 +1200,34 @@ bool Esp32Camera::CaptureRawFrame() {
     // esp_video_deinit();
     // mmap_buffers_.clear();
 
+    // 将捕获的帧编码为 JPEG 并存入循环缓冲区
+    // 这样在需要上传时可以获取最近5帧的 JPEG 数据
+    std::vector<uint8_t> jpeg_buffer;
+    bool jpeg_ok = image_to_jpeg_cb(
+        frame_.data, frame_.len,
+        frame_.width, frame_.height,
+        (v4l2_pix_fmt_t)frame_.format, 85,  // quality 85
+        [](void* arg, size_t index, const void* data, size_t len) -> size_t {
+            auto* jpeg_vec = static_cast<std::vector<uint8_t>*>(arg);
+            if (data != nullptr && len > 0) {
+                if (index == 0) {
+                    jpeg_vec->reserve(len * 2);  // 预估JPEG大小
+                }
+                const uint8_t* byte_data = static_cast<const uint8_t*>(data);
+                jpeg_vec->insert(jpeg_vec->end(), byte_data, byte_data + len);
+            }
+            return len;
+        },
+        &jpeg_buffer
+    );
+
+    if (jpeg_ok && !jpeg_buffer.empty()) {
+        // 存入循环缓冲区（自动覆盖最旧的帧）
+        jpeg_circular_buffer_.AddFrame(jpeg_buffer.data(), jpeg_buffer.size());
+        ESP_LOGI(TAG, "JPEG encoded and stored in circular buffer: %u bytes", (unsigned int)jpeg_buffer.size());
+    } else {
+        ESP_LOGW(TAG, "Failed to encode JPEG for circular buffer");
+    }
 
     return true;
 }

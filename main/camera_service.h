@@ -11,6 +11,9 @@
 #include <mutex>
 #include <deque>
 
+// 前向声明（在 esp32_camera.h 中定义）
+struct JpegFrameBuffer;
+
 /**
  * @brief CameraService - 摄像头任务执行层
  *
@@ -189,6 +192,18 @@ private:
     bool UploadToServer(const uint8_t* data, size_t len,
                        const std::string& context,
                        std::string& out_image_id);
+
+    /**
+     * @brief HTTP上传多帧到服务器
+     * @param frames JPEG帧数组
+     * @param frame_count 帧数量
+     * @param context 上下文类型
+     * @param out_image_id [out] 输出的image_id
+     * @return 是否成功
+     */
+    bool UploadMultipleFramesToServer(const JpegFrameBuffer* frames, size_t frame_count,
+                                      const std::string& context,
+                                      std::string& out_image_id);
 
     // 主动模式任务
     void ActiveModeTask();

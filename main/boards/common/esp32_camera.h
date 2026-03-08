@@ -6,6 +6,7 @@
 #include <thread>
 #include <memory>
 #include <vector>
+#include <array>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -14,9 +15,47 @@
 #include "jpg/image_to_jpeg.h"
 #include "esp_video_init.h"
 
+// JPEG 帧缓冲区结构（用于循环缓冲区）
+struct JpegFrameBuffer {
+    uint8_t* data = nullptr;   // JPEG 数据指针（PSRAM中）
+    size_t len = 0;            // JPEG 数据长度
+    size_t capacity = 0;       // 分配的缓冲区大小
+    bool valid = false;        // 是否包含有效数据
+};
+
 struct JpegChunk {
     uint8_t* data;
     size_t len;
+};
+
+// 循环缓冲区：存储最近 N 帧 JPEG 数据
+class JpegCircularBuffer {
+public:
+    static constexpr size_t CAPACITY = 5;       // 缓冲5帧
+    static constexpr size_t MAX_JPEG_SIZE = 51200;  // 每帧最大 50KB
+
+    JpegCircularBuffer() : write_index_(0), count_(0) {}
+
+    // 初始化缓冲区（分配内存）
+    bool Initialize();
+
+    // 释放缓冲区
+    void Cleanup();
+
+    // 添加一帧（覆盖最旧的帧）
+    bool AddFrame(const uint8_t* data, size_t len);
+
+    // 获取最近的 N 帧（按时间顺序，从旧到新）
+    // 返回实际获取的帧数
+    size_t GetRecentFrames(size_t count, JpegFrameBuffer* out_frames);
+
+    // 获取当前有效帧数
+    size_t GetValidFrameCount() const { return count_; }
+
+private:
+    std::array<JpegFrameBuffer, CAPACITY> buffers_;
+    size_t write_index_;   // 当前写入位置
+    size_t count_;         // 有效帧数（最多 CAPACITY）
 };
 
 class Esp32Camera : public Camera {
@@ -44,6 +83,9 @@ private:
     std::thread encoder_thread_;
     SemaphoreHandle_t init_sem_ = nullptr;  // 初始化完成信号量
 
+    // JPEG 循环缓冲区
+    JpegCircularBuffer jpeg_circular_buffer_;
+
 public:
     Esp32Camera(const esp_video_init_config_t& config);
     ~Esp32Camera();
@@ -59,6 +101,9 @@ public:
     // 获取和释放帧数据
     virtual FrameData GetFrameData() override;
     virtual void ReleaseFrameData() override;
+
+    // 获取循环缓冲区引用（用于 CameraService 访问）
+    JpegCircularBuffer& GetJpegCircularBuffer() { return jpeg_circular_buffer_; }
 };
 
 #endif // ndef CONFIG_IDF_TARGET_ESP32
