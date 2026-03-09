@@ -61,12 +61,6 @@ void ImageIdCache::Cleanup(uint64_t max_age_ms) {
             }),
         cache_.end()
     );
-
-    size_t removed = old_size - cache_.size();
-    if (removed > 0) {
-        ESP_LOGI(TAG, "Cleaned up %u expired records, remaining: %u",
-                removed, cache_.size());
-    }
 }
 
 size_t ImageIdCache::Size() const {

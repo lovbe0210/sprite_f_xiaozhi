@@ -19,22 +19,6 @@
 
 #define TAG "Application"
 
-
-static const char* const STATE_STRINGS[] = {
-    "unknown",
-    "starting",
-    "configuring",
-    "idle",
-    "connecting",
-    "listening",
-    "speaking",
-    "upgrading",
-    "activating",
-    "audio_testing",
-    "fatal_error",
-    "invalid_state"
-};
-
 Application::Application() {
     event_group_ = xEventGroupCreate();
 

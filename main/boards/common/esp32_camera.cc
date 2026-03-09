@@ -380,6 +380,7 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
     req.count = strcmp(video_device_name, ESP_VIDEO_MIPI_CSI_DEVICE_NAME) == 0 ? 2 : 1;
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
+    ESP_LOGI(TAG, "Requesting %u buffers", req.count);
     if (ioctl(video_fd_, VIDIOC_REQBUFS, &req) != 0) {
         ESP_LOGE(TAG, "VIDIOC_REQBUFS failed");
         close(video_fd_);
@@ -387,6 +388,7 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
         sensor_format_ = 0;
         return;
     }
+    ESP_LOGI(TAG, "VIDIOC_REQBUFS succeeded, allocated %u buffers", req.count);
     mmap_buffers_.resize(req.count);
     for (uint32_t i = 0; i < req.count; i++) {
         struct v4l2_buffer buf = {};
@@ -394,15 +396,16 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
         buf.memory = V4L2_MEMORY_MMAP;
         buf.index = i;
         if (ioctl(video_fd_, VIDIOC_QUERYBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_QUERYBUF failed");
+            ESP_LOGE(TAG, "VIDIOC_QUERYBUF failed for buffer %u", i);
             close(video_fd_);
             video_fd_ = -1;
             sensor_format_ = 0;
             return;
         }
+        ESP_LOGI(TAG, "Buffer %u: length=%u, offset=%u", i, buf.length, buf.m.offset);
         void* start = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, video_fd_, buf.m.offset);
         if (start == MAP_FAILED) {
-            ESP_LOGE(TAG, "mmap failed");
+            ESP_LOGE(TAG, "mmap failed for buffer %u", i);
             close(video_fd_);
             video_fd_ = -1;
             sensor_format_ = 0;
@@ -410,15 +413,18 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
         }
         mmap_buffers_[i].start = start;
         mmap_buffers_[i].length = buf.length;
+        ESP_LOGI(TAG, "Buffer %u: mmap succeeded at %p, length=%u", i, start, buf.length);
 
         if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_QBUF failed");
+            ESP_LOGE(TAG, "VIDIOC_QBUF failed for buffer %u during init", i);
             close(video_fd_);
             video_fd_ = -1;
             sensor_format_ = 0;
             return;
         }
+        ESP_LOGI(TAG, "Buffer %u: QBUF succeeded during init", i);
     }
+    ESP_LOGI(TAG, "All buffers initialized and queued");
 
     // 不在构造函数中启动流，改为按需启动（在第一次拍照时启动）
     // 这样可以避免相机 DMA 中断与音频处理冲突
@@ -993,12 +999,7 @@ FrameData Esp32Camera::GetFrameData() {
 }
 
 void Esp32Camera::ReleaseFrameData() {
-    // 不释放帧缓冲区内存，保留供下次拍照复用
-    // 这样可以避免内存碎片化
-    if (frame_.data) {
-        ESP_LOGI(TAG, "Releasing frame data (keeping buffer allocated): %p, %zu bytes", frame_.data, frame_.len);
-        // 注意：不调用 heap_caps_free，保留内存供下次使用
-    }
+    // 不释放帧缓冲区内存，保留供下次拍照复用，这样可以避免内存碎片化
     // 清空帧信息，但保留指针
     frame_.len = 0;
     frame_.width = 0;
@@ -1044,9 +1045,6 @@ bool Esp32Camera::SetVFlip(bool enabled) {
  * 只拍照，不做照片预览和显示
  */
 bool Esp32Camera::CaptureRawFrame() {
-    ESP_LOGI(TAG, "CaptureRawFrame: starting capture, streaming_on=%d, video_fd=%d",
-             streaming_on_, video_fd_);
-
     // 如果之前拍过照，等待一下让系统释放内存
     if (streaming_on_ && frame_.data != nullptr) {
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -1063,7 +1061,6 @@ bool Esp32Camera::CaptureRawFrame() {
             return false;
         }
 
-        ESP_LOGI(TAG, "Starting camera stream for first capture");
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (ioctl(video_fd_, VIDIOC_STREAMON, &type) != 0) {
             ESP_LOGE(TAG, "VIDIOC_STREAMON failed");
@@ -1079,22 +1076,23 @@ bool Esp32Camera::CaptureRawFrame() {
             buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             buf.memory = V4L2_MEMORY_MMAP;
             if (ioctl(video_fd_, VIDIOC_DQBUF, &buf) == 0) {
-                ioctl(video_fd_, VIDIOC_QBUF, &buf);
+                if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                    ESP_LOGE(TAG, "Init discard %d: QBUF failed for buffer index=%d, errno=%d", i, buf.index, errno);
+                }
+            } else {
+                ESP_LOGW(TAG, "Init discard %d: DQBUF failed, errno=%d", i, errno);
             }
             vTaskDelay(pdMS_TO_TICKS(10));
         }
-
         streaming_on_ = true;
-        ESP_LOGI(TAG, "Camera stream started and stabilized");
     }
 
-    ESP_LOGI(TAG, "CaptureRawFrame: starting DQBUF loop");
     for (int i = 0; i < 3; i++) {
         struct v4l2_buffer buf = {};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
         if (ioctl(video_fd_, VIDIOC_DQBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_DQBUF failed");
+            ESP_LOGE(TAG, "VIDIOC_DQBUF failed at iteration %d, errno=%d", i, errno);
             return false;
         }
         if (i == 2) {
@@ -1103,14 +1101,18 @@ bool Esp32Camera::CaptureRawFrame() {
 
             // 预分配并复用帧缓冲区，避免每次拍照都分配/释放 614KB 内存
             if (frame_.data == nullptr || frame_allocated_len_ < frame_.len) {
+                ESP_LOGI(TAG, "Need to allocate: frame_.data=%p, frame_allocated_len_=%d, frame_.len=%d",
+                         frame_.data, frame_allocated_len_, frame_.len);
                 // 需要分配或重新分配内存
                 if (frame_.data != nullptr) {
+                    ESP_LOGI(TAG, "Freeing old frame buffer");
                     heap_caps_free(frame_.data);
                     frame_.data = nullptr;
                 }
 
                 // 分配内存（留一点余量以适应不同大小的帧）
                 frame_allocated_len_ = frame_.len + 4096;  // 多分配 4KB 作为余量
+                ESP_LOGI(TAG, "Attempting to allocate %d bytes", frame_allocated_len_);
 
                 // 分配内存
                 frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
@@ -1133,8 +1135,6 @@ bool Esp32Camera::CaptureRawFrame() {
                     }
                     return false;
                 }
-
-                ESP_LOGI(TAG, "Allocated persistent frame buffer: %zu bytes", frame_allocated_len_);
             }
             // 否则重用之前分配的内存（不释放）
 
@@ -1178,28 +1178,9 @@ bool Esp32Camera::CaptureRawFrame() {
             }
         }
         if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_QBUF failed");
+            ESP_LOGE(TAG, "VIDIOC_QBUF failed at iteration %d for buffer index=%d, errno=%d", i, buf.index, errno);
         }
     }
-
-    // 关闭视频流，清理缓冲区
-    // if (streaming_on_ && video_fd_ >= 0) {
-    //     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    //     ioctl(video_fd_, VIDIOC_STREAMOFF, &type);
-    // }
-    // for (auto& b : mmap_buffers_) {
-    //     if (b.start && b.length) {
-    //         munmap(b.start, b.length);
-    //     }
-    // }
-    // if (video_fd_ >= 0) {
-    //     close(video_fd_);
-    //     video_fd_ = -1;
-    // }
-    // sensor_format_ = 0;
-    // esp_video_deinit();
-    // mmap_buffers_.clear();
-
     // 将捕获的帧编码为 JPEG 并存入循环缓冲区
     // 这样在需要上传时可以获取最近5帧的 JPEG 数据
     std::vector<uint8_t> jpeg_buffer;
@@ -1224,7 +1205,6 @@ bool Esp32Camera::CaptureRawFrame() {
     if (jpeg_ok && !jpeg_buffer.empty()) {
         // 存入循环缓冲区（自动覆盖最旧的帧）
         jpeg_circular_buffer_.AddFrame(jpeg_buffer.data(), jpeg_buffer.size());
-        ESP_LOGI(TAG, "JPEG encoded and stored in circular buffer: %u bytes", (unsigned int)jpeg_buffer.size());
     } else {
         ESP_LOGW(TAG, "Failed to encode JPEG for circular buffer");
     }

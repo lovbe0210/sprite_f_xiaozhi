@@ -61,12 +61,11 @@ public:
      * @brief 配置结构（只包含用户需要调整的参数）
      */
     struct Config {
-        int active_interval_ms = 5000;     ///< 主动模式间隔（毫秒）
+        int active_interval_ms = 100;      ///< 主动模式间隔（毫秒）
         int passive_delay_ms = 500;        ///< 被动模式延迟（毫秒）
 
         // 多帧拍摄配置
-        int multi_frame_count = 5;          ///< 连续拍摄帧数（建议3-5帧）
-        int multi_frame_interval_ms = 50;   ///< 帧间隔（毫秒，建议30-100ms）
+        int multi_frame_count = 3;          ///< 连续拍摄帧数
 
         Config() = default;
     };
@@ -207,6 +206,7 @@ private:
      */
     bool UploadMultipleFramesToServer(const JpegFrameBuffer* frames, size_t frame_count,
                                       const std::string& context,
+                                      const char* device_state,
                                       std::string& out_image_id);
 
     // 主动模式任务

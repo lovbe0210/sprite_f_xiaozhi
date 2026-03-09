@@ -498,8 +498,6 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
     result.success = true;
     result.image_id = image_id;
 
-    ESP_LOGI("CameraService", "Task completed: image_id=%s", image_id.c_str());
-
     return result;
 }
 

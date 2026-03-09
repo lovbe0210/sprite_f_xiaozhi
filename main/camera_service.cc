@@ -174,9 +174,9 @@ CameraService::TaskResult CameraService::ExecuteTask(const TaskParams& params) {
 void CameraService::SetConfig(const Config& config) {
     std::lock_guard<std::mutex> lock(mutex_);
     config_ = config;
-    ESP_LOGI(TAG, "Config updated: active_interval=%d, passive_delay=%d, multi_frame_count=%d, multi_frame_interval=%d",
+    ESP_LOGI(TAG, "Config updated: active_interval=%d, passive_delay=%d, multi_frame_count=%d",
             config.active_interval_ms, config.passive_delay_ms,
-            config.multi_frame_count, config.multi_frame_interval_ms);
+            config.multi_frame_count);
 }
 
 CameraService::Config CameraService::GetConfig() const {
@@ -195,8 +195,6 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
     result.context = params.context;
 
     ESP_LOGI(TAG, "=== Task start: context=%s, delay=%d ===", params.context.c_str(), params.delay_ms);
-    ESP_LOGI(TAG, "Executing task: context=%s, delay=%d",
-            params.context.c_str(), params.delay_ms);
 
     // 1. 延迟（如需要）
     if (params.delay_ms > 0) {
@@ -216,10 +214,6 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
 
     // 使用串行编码方案：捕获->编码->存储，循环多次
     const int frame_count = config_.multi_frame_count;
-    const int frame_interval_ms = config_.multi_frame_interval_ms;
-
-    ESP_LOGI(TAG, "Starting serial capture: %d frames, %dms interval", frame_count, frame_interval_ms);
-
     int successful_frames = 0;
 
     // 循环捕获多帧，每次捕获后立即编码并存储
@@ -251,18 +245,15 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
             esp32_camera->GetJpegCircularBuffer().AddFrame(
                 g_jpeg_data_buffer.data(), g_jpeg_data_buffer.size());
             successful_frames++;
-            ESP_LOGI(TAG, "Frame %d encoded: %u bytes", i, (unsigned int)g_jpeg_data_buffer.size());
         } else {
             ESP_LOGW(TAG, "Frame %d encoding failed", i);
         }
 
     }
 
-    ESP_LOGI(TAG, "Serial capture completed: %d/%d frames successful", successful_frames, frame_count);
-
     // 3. 从循环缓冲区获取最近的帧 JPEG 数据
-    JpegFrameBuffer frames[5];
-    size_t actual_frame_count = esp32_camera->GetJpegCircularBuffer().GetRecentFrames(5, frames);
+    JpegFrameBuffer frames[3];
+    size_t actual_frame_count = esp32_camera->GetJpegCircularBuffer().GetRecentFrames(frame_count, frames);
 
     if (actual_frame_count == 0) {
         result.success = false;
@@ -271,11 +262,10 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
         return result;
     }
 
-    ESP_LOGI(TAG, "Got %u frames from circular buffer", (unsigned int)actual_frame_count);
-
     // 4. HTTP上传多帧，获取image_id
     std::string image_id;
-    if (!UploadMultipleFramesToServer(frames, actual_frame_count, params.context, image_id)) {
+    const char* device_state = STATE_STRINGS[current_state_];
+    if (!UploadMultipleFramesToServer(frames, actual_frame_count, params.context, device_state, image_id)) {
         result.success = false;
         result.error_message = "Failed to upload to server";
         stats_.failed_captures++;
@@ -299,8 +289,6 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
         } else {
             stats_.passive_mode_captures++;
         }
-
-        ESP_LOGI(TAG, "Task completed: image_id=%s (%u frames)", image_id.c_str(), (unsigned int)actual_frame_count);
     }
 
     stats_.total_captures++;
@@ -382,8 +370,6 @@ bool CameraService::UploadToServer(const uint8_t* data, size_t len,
         http->SetHeader("Authorization", auth_buf);
     }
 
-    ESP_LOGI(TAG, "Uploading to: %s", upload_url.c_str());
-
     if (!http->Open("POST", upload_url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
         return false;
@@ -442,8 +428,6 @@ bool CameraService::UploadToServer(const uint8_t* data, size_t len,
     // 读取响应体
     std::string response = http->ReadAll();
     http->Close();
-
-    ESP_LOGI(TAG, "Server response status: %d, length: %u bytes", status_code, (unsigned int)response.length());
 
     // 检查响应是否为空
     if (response.empty()) {
@@ -506,12 +490,12 @@ bool CameraService::UploadToServer(const uint8_t* data, size_t len,
 
     out_image_id = image_id->valuestring;
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "Upload successful: image_id=%s", out_image_id.c_str());
     return true;
 }
 
 bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, size_t frame_count,
                                                    const std::string& context,
+                                                   const char* device_state,
                                                    std::string& out_image_id) {
     // 从Settings获取上传URL和token（与WebSocket使用相同的api_server配置）
     Settings settings("api_server", false);
@@ -565,8 +549,6 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
         http->SetHeader("Authorization", auth_buf);
     }
 
-    ESP_LOGI(TAG, "Uploading %u frames to: %s", (unsigned int)frame_count, upload_url.c_str());
-
     if (!http->Open("POST", upload_url)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
         return false;
@@ -591,6 +573,16 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
         timestamp_field += "\r\n";
         timestamp_field += std::to_string(esp_timer_get_time() / 1000) + "\r\n";
         http->Write(timestamp_field.c_str(), timestamp_field.size());
+    }
+
+    // device_state字段
+    {
+        std::string device_state_field;
+        device_state_field += "--" + boundary + "\r\n";
+        device_state_field += "Content-Disposition: form-data; name=\"device_state\"\r\n";
+        device_state_field += "\r\n";
+        device_state_field += std::string(device_state) + "\r\n";
+        http->Write(device_state_field.c_str(), device_state_field.size());
     }
 
     // 上传多帧文件
@@ -621,8 +613,6 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
 
         // 每个part结束后需要发送 \r\n
         http->Write("\r\n", 2);
-
-        ESP_LOGI(TAG, "Uploaded frame %u: %u bytes", (unsigned int)i, (unsigned int)frame.len);
     }
 
     // 结束边界
@@ -644,8 +634,6 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
     // 读取响应体
     std::string response = http->ReadAll();
     http->Close();
-
-    ESP_LOGI(TAG, "Server response status: %d, length: %u bytes", status_code, (unsigned int)response.length());
 
     // 检查响应是否为空
     if (response.empty()) {
@@ -687,7 +675,6 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
 
     out_image_id = image_id->valuestring;
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "Upload successful: image_id=%s (%u frames)", out_image_id.c_str(), (unsigned int)frame_count);
     return true;
 }
 
