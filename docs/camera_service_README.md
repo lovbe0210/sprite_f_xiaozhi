@@ -182,21 +182,63 @@ Content-Type: image/jpeg
 ```
 
 **响应**：
+
+服务器根据不同的场景返回不同的响应格式：
+
+#### 模式1：speaking 语音打断检测模式
+
+
 ```json
 {
-  "success": true,
-  "image_id": "img_1736789123456_listening_abc123",
-  "size": 45678,
-  "url": "http://api.example.com/camera/image/img_1736789123456_listening_abc123",
-  "detection_result": {
-    "faces": [
-      {"id": "user_123", "confidence": 0.95, "bbox": [100, 100, 200, 200]}
-    ],
-    "gestures": [],
-    "should_wake": false
+  "code": 200,
+  "message": "操作成功",
+  "data": {
+    "detection_result": {
+      "interrupt": "true",
+      "reason": null,
+      "confidence": 0.95
+    }
   }
 }
 ```
+
+#### 模式2：ilde 唤醒检测模式
+
+
+```json
+{
+  "code": 200,
+  "message": "操作成功",
+  "data": {
+    "detection_result": {
+      "activate": false,
+      "reason": null,
+      "confidence": 0.0
+    }
+  }
+}
+```
+
+#### 模式3：listening 设备聆听模式，由服务器自动保存listening状态期间的动作及交互
+
+
+```json
+{
+  "code": 200,
+  "message": "操作成功",
+  "data": {
+  }
+}
+```
+
+**字段说明**：
+- `code`: 200表示成功
+- `message`: 状态描述
+- `data.detection_result`: 检测结果
+  - `interrupt`: 是否打断当前设备说话状态，切换为listening状态
+  - `activate`：是否激活设备，设备状态切换为listening状态
+  - `reason`: 简短描述唤醒的原因
+  - `confidence`: 检测置信度（0.0-1.0）
 
 ### GET /api/camera/image/<image_id>
 

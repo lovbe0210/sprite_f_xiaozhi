@@ -8,6 +8,7 @@
 #include <cJSON.h>
 #include <esp_timer.h>
 #include <vector>
+#include <cstdio>
 
 static const char* TAG = "CameraService";
 
@@ -64,26 +65,7 @@ void CameraService::Initialize(Camera* camera) {
     // 初始化 Camera 指针
     camera_ = camera;
 
-    // 创建 ImageIdCache 实例（内部管理）
-    cache_ = std::make_unique<ImageIdCache>(20);  // 默认缓存20个ID
-
-    ESP_LOGI(TAG, "CameraService initialized with internal ImageIdCache");
-}
-
-std::string CameraService::GetLatestImageId(const std::string& context) {
-    if (cache_ == nullptr) {
-        ESP_LOGW(TAG, "ImageIdCache not initialized");
-        return "";
-    }
-    return cache_->GetLatestId(context);
-}
-
-ImageIdRecord CameraService::GetLatestImageRecord(const std::string& context) {
-    if (cache_ == nullptr) {
-        ESP_LOGW(TAG, "ImageIdCache not initialized");
-        return ImageIdRecord{"", 0, "", ""};
-    }
-    return cache_->GetLatestRecord(context);
+    ESP_LOGI(TAG, "CameraService initialized");
 }
 
 void CameraService::Start() {
@@ -94,7 +76,7 @@ void CameraService::Start() {
         return;
     }
 
-    if (camera_ == nullptr || cache_ == nullptr) {
+    if (camera_ == nullptr) {
         ESP_LOGE(TAG, "CameraService not initialized, call Initialize() first");
         return;
     }
@@ -232,13 +214,12 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
             continue;
         }
 
-        // 编码为JPEG（使用静态缓冲区避免重复分配）
+        // 编码为JPEG（使用静态缓冲区避免重复分配)
+        // 使用较低的质量以减少图片大小和内存占用
         g_jpeg_data_buffer.clear();
         bool encode_ok = EncodeFrameToJpeg(fd.data, fd.len, fd.width, fd.height,
-                                          (v4l2_pix_fmt_t)fd.format, 85,
-                                          g_jpeg_data_buffer);
-
-        camera_->ReleaseFrameData();
+                                          (v4l2_pix_fmt_t)fd.format, 60,  // 降低质量到60以减少内存压力
+                                          g_jpeg_data_buffer);        camera_->ReleaseFrameData();
 
         if (encode_ok && !g_jpeg_data_buffer.empty()) {
             // 存入循环缓冲区
@@ -262,10 +243,9 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
         return result;
     }
 
-    // 4. HTTP上传多帧，获取image_id
-    std::string image_id;
+    // 4. HTTP上传多帧
     const char* device_state = STATE_STRINGS[current_state_];
-    if (!UploadMultipleFramesToServer(frames, actual_frame_count, params.context, device_state, image_id)) {
+    if (!UploadMultipleFramesToServer(frames, actual_frame_count, params.context, device_state)) {
         result.success = false;
         result.error_message = "Failed to upload to server";
         stats_.failed_captures++;
@@ -273,36 +253,22 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
         return result;
     }
 
-    // 5. 缓存image_id
-    if (!image_id.empty()) {
-        ImageIdRecord record;
-        record.id = image_id;
-        record.timestamp_ms = result.timestamp_ms;
-        record.context = params.context;
-
-        cache_->Add(record);
-
-        stats_.successful_captures++;
-
-        if (params.context == "active") {
-            stats_.active_mode_captures++;
-        } else {
-            stats_.passive_mode_captures++;
-        }
-    }
-
+    // 5. 更新统计
+    stats_.successful_captures++;
     stats_.total_captures++;
-    result.success = true;
-    result.image_id = image_id;
 
-    // 任务完成，等待一段时间让系统整理内存
-    // 这样可以减少与语音识别等任务的内存竞争
-    vTaskDelay(pdMS_TO_TICKS(200));
-
-    // 7. 自动清理过期ID（如需要）
-    if (params.auto_cleanup) {
-        CleanupExpiredIds();
+    if (params.context == "active") {
+        stats_.active_mode_captures++;
+    } else {
+        stats_.passive_mode_captures++;
     }
+
+    result.success = true;
+
+    // 任务完成,等待更长时间让系统整理内存
+    // 这样可以减少与语音识别等任务的内存竞争
+    // 特别是在内存碎片化严重的情况下
+    vTaskDelay(pdMS_TO_TICKS(1000));  // 增加到 1000ms 以减少内存压力
 
     // 清空JPEG数据缓冲区（保留容量供下次使用）
     g_jpeg_data_buffer.clear();
@@ -310,193 +276,9 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
     return result;
 }
 
-bool CameraService::UploadToServer(const uint8_t* data, size_t len,
-                                  const std::string& context,
-                                  std::string& out_image_id) {
-    // 从Settings获取上传URL和token（与WebSocket使用相同的api_server配置）
-    Settings settings("api_server", false);
-    std::string upload_url = settings.GetString("url");
-
-    // 移除末尾的斜杠（如果有）
-    if (!upload_url.empty() && upload_url.back() == '/') {
-        upload_url.pop_back();
-    }
-
-    std::string upload_token = settings.GetString("token");
-
-    // 首先检查 URL 配置
-    if (upload_url.empty()) {
-        ESP_LOGE(TAG, "Upload URL not configured in settings (api_server.url), please configure it first");
-        return false;
-    }
-
-    // 然后检查数据
-    if (data == nullptr) {
-        ESP_LOGE(TAG, "Camera data is nullptr, cannot upload");
-        return false;
-    }
-
-    if (len == 0) {
-        ESP_LOGE(TAG, "Camera data length is 0, cannot upload. Check if Camera::GetFrameData() is implemented");
-        return false;
-    }
-
-    // 实际HTTP上传
-    auto network = Board::GetInstance().GetNetwork();
-    if (network == nullptr) {
-        ESP_LOGE(TAG, "Network is null");
-        return false;
-    }
-
-    auto http = network->CreateHttp(3);
-    if (http == nullptr) {
-        ESP_LOGE(TAG, "Failed to create HTTP client");
-        return false;
-    }
-
-    std::string boundary = "----ESP32_CAMERA_BOUNDARY";
-
-    // 配置HTTP（使用静态缓冲区避免字符串拼接分配）
-    static char content_type_buf[128];
-    snprintf(content_type_buf, sizeof(content_type_buf), "multipart/form-data; boundary=%s", boundary.c_str());
-    http->SetHeader("Content-Type", content_type_buf);
-
-    http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
-    http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
-
-    if (!upload_token.empty()) {
-        static char auth_buf[256];
-        snprintf(auth_buf, sizeof(auth_buf), "Bearer %s", upload_token.c_str());
-        http->SetHeader("Authorization", auth_buf);
-    }
-
-    if (!http->Open("POST", upload_url)) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection");
-        return false;
-    }
-
-    // 构造multipart body
-    // context字段
-    {
-        std::string context_field;
-        context_field += "--" + boundary + "\r\n";
-        context_field += "Content-Disposition: form-data; name=\"context\"\r\n";
-        context_field += "\r\n";
-        context_field += context + "\r\n";
-        http->Write(context_field.c_str(), context_field.size());
-    }
-
-    // timestamp字段
-    {
-        std::string timestamp_field;
-        timestamp_field += "--" + boundary + "\r\n";
-        timestamp_field += "Content-Disposition: form-data; name=\"timestamp\"\r\n";
-        timestamp_field += "\r\n";
-        timestamp_field += std::to_string(esp_timer_get_time() / 1000) + "\r\n";
-        http->Write(timestamp_field.c_str(), timestamp_field.size());
-    }
-
-    // 文件头部
-    {
-        std::string file_header;
-        file_header += "--" + boundary + "\r\n";
-        file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\n";
-        file_header += "Content-Type: image/jpeg\r\n";
-        file_header += "\r\n";
-        http->Write(file_header.c_str(), file_header.size());
-    }
-
-    // 发送JPEG数据
-    http->Write((const char*)data, len);
-
-    // 结束边界
-    {
-        std::string end_boundary;
-        end_boundary += "\r\n--" + boundary + "--\r\n";
-        http->Write(end_boundary.c_str(), end_boundary.size());
-    }
-    http->Write("", 0);  // 结束请求
-
-    // 解析响应，提取image_id
-    auto status_code = http->GetStatusCode();
-    if (status_code != 200) {
-        ESP_LOGE(TAG, "HTTP upload failed with status: %d", status_code);
-        http->Close();
-        return false;
-    }
-
-    // 读取响应体
-    std::string response = http->ReadAll();
-    http->Close();
-
-    // 检查响应是否为空
-    if (response.empty()) {
-        ESP_LOGE(TAG, "Server returned empty response (status: %d)", status_code);
-        return false;
-    }
-
-    // 打印响应内容（只打印可打印字符，避免崩溃）
-    constexpr size_t max_print_len = 500;
-    size_t print_len = std::min(response.length(), max_print_len);
-    std::string printable;
-    for (size_t i = 0; i < print_len; i++) {
-        unsigned char c = response[i];
-        if (c >= 32 && c <= 126) {
-            printable += c;
-        } else if (c == '\n') {
-            printable += "\\n";
-        } else if (c == '\r') {
-            printable += "\\r";
-        } else if (c == '\t') {
-            printable += "\\t";
-        } else {
-            printable += "?";  // 替换不可打印字符
-        }
-    }
-    ESP_LOGI(TAG, "Response printable: %s", printable.c_str());
-
-    // JSON解析
-    // 服务器返回格式: {"code":200,"message":"xxx","data":{"image_id":"xxx","detection_result":{...}}}
-    cJSON* root = cJSON_Parse(response.c_str());
-    if (root == nullptr) {
-        ESP_LOGE(TAG, "Failed to parse JSON response");
-        return false;
-    }
-
-    // 检查 code 字段（200 表示成功）
-    cJSON* code = cJSON_GetObjectItem(root, "code");
-    if (code == nullptr || !cJSON_IsNumber(code) || code->valueint != 200) {
-        int code_val = code ? code->valueint : -1;
-        ESP_LOGE(TAG, "Response indicates failure: code=%d (expected 200)", code_val);
-        cJSON_Delete(root);
-        return false;
-    }
-
-    // 获取 data 对象
-    cJSON* data_obj = cJSON_GetObjectItem(root, "data");
-    if (data_obj == nullptr) {
-        ESP_LOGE(TAG, "No data object in response");
-        cJSON_Delete(root);
-        return false;
-    }
-
-    // 从 data 中获取 image_id
-    cJSON* image_id = cJSON_GetObjectItem(data_obj, "image_id");
-    if (image_id == nullptr || !cJSON_IsString(image_id)) {
-        ESP_LOGE(TAG, "No image_id in data object");
-        cJSON_Delete(root);
-        return false;
-    }
-
-    out_image_id = image_id->valuestring;
-    cJSON_Delete(root);
-    return true;
-}
-
 bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, size_t frame_count,
                                                    const std::string& context,
-                                                   const char* device_state,
-                                                   std::string& out_image_id) {
+                                                   const char* device_state) {
     // 从Settings获取上传URL和token（与WebSocket使用相同的api_server配置）
     Settings settings("api_server", false);
     std::string upload_url = settings.GetString("url");
@@ -665,15 +447,36 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
         return false;
     }
 
-    // 从 data 中获取 image_id
-    cJSON* image_id = cJSON_GetObjectItem(data_obj, "image_id");
-    if (image_id == nullptr || !cJSON_IsString(image_id)) {
-        ESP_LOGE(TAG, "No image_id in data object");
+    // 根据上下文处理不同的响应模式
+    // 1. speaking 语音打断检测模式: detection_result.interrupt
+    // 2. idle 唤醒检测模式: detection_result.activate
+    // 3. listening 设备聆听模式: 空 data 对象（服务器自动保存）
+    cJSON* detection_result = cJSON_GetObjectItem(data_obj, "detection_result");
+    if (detection_result != nullptr) {
+        // 解析检测结果
+        cJSON* interrupt = cJSON_GetObjectItem(detection_result, "interrupt");
+        cJSON* activate = cJSON_GetObjectItem(detection_result, "activate");
+        cJSON* reason = cJSON_GetObjectItem(detection_result, "reason");
+        cJSON* confidence = cJSON_GetObjectItem(detection_result, "confidence");
+
+        if (interrupt != nullptr) {
+            bool should_interrupt = cJSON_IsTrue(interrupt);
+            const char* reason_str = reason ? reason->valuestring : "unknown";
+            double conf = confidence ? confidence->valuedouble : 0.0;
+            ESP_LOGI(TAG, "Speaking mode: interrupt=%d, reason=%s, confidence=%.2f",
+                     should_interrupt, reason_str, conf);
+        } else if (activate != nullptr) {
+            bool should_activate = cJSON_IsTrue(activate);
+            const char* reason_str = reason ? reason->valuestring : "unknown";
+            double conf = confidence ? confidence->valuedouble : 0.0;
+            ESP_LOGI(TAG, "Idle mode: activate=%d, reason=%s, confidence=%.2f",
+                     should_activate, reason_str, conf);
+        }
+
         cJSON_Delete(root);
-        return false;
+        return true;  // 检测模式成功
     }
 
-    out_image_id = image_id->valuestring;
     cJSON_Delete(root);
     return true;
 }
@@ -704,13 +507,10 @@ void CameraService::ActiveModeTask() {
         auto result = ExecuteTask(params);
 
         if (result.success) {
-            ESP_LOGI(TAG, "Active mode: image_id=%s", result.image_id.c_str());
+            ESP_LOGI(TAG, "Active mode: upload success");
         } else {
             ESP_LOGW(TAG, "Active mode failed: %s", result.error_message.c_str());
         }
-
-        // 自动清理过期ID
-        CleanupExpiredIds();
     }
 
     ESP_LOGI(TAG, "Active mode task stopped");
@@ -769,19 +569,11 @@ void CameraService::PassiveModeTaskWrapper(void* arg) {
     auto result = service->ExecuteTask(params);
 
     if (result.success) {
-        ESP_LOGI(TAG, "Passive mode (%s): image_id=%s",
-                context.c_str(), result.image_id.c_str());
+        ESP_LOGI(TAG, "Passive mode (%s): upload success", context.c_str());
     } else {
         ESP_LOGW(TAG, "Passive mode (%s) failed: %s",
                 context.c_str(), result.error_message.c_str());
     }
 
     vTaskDelete(NULL);
-}
-
-void CameraService::CleanupExpiredIds() {
-    // 硬编码60秒过期时间
-    if (cache_ != nullptr) {
-        cache_->Cleanup(60000);
-    }
 }

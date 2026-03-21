@@ -32,7 +32,7 @@ struct JpegChunk {
 class JpegCircularBuffer {
 public:
     static constexpr size_t CAPACITY = 3;       // 缓冲帧数容量
-    static constexpr size_t MAX_JPEG_SIZE = 51200;  // 每帧最大 50KB
+    static constexpr size_t MAX_JPEG_SIZE = 153600;  // 每帧最大 150KB (增加以容纳更大的JPEG)
 
     JpegCircularBuffer() : write_index_(0), count_(0) {}
 

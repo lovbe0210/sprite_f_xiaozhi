@@ -22,8 +22,8 @@ struct JpegFrameBuffer;
  * - 被动模式：Listening/Speaking状态拍照辅助语音交互
  *
  * 核心特性：
- * - 任务化封装：拍照→上传→返回ID 整体封装
- * - 完全解耦：业务层只需获取image_id
+ * - 任务化封装：拍照→上传→返回结果 整体封装
+ * - 简化接口：服务器自动保存图片，无需客户端管理ID
  * - 异步执行：不阻塞音频和其他任务
  * - 优雅降级：摄像头失败不影响核心功能
  */
@@ -49,7 +49,6 @@ public:
      */
     struct TaskResult {
         bool success;                  ///< 任务是否成功
-        std::string image_id;          ///< 服务端返回的image_id
         std::string error_message;     ///< 错误信息
         uint64_t timestamp_ms;         ///< 时间戳
         std::string context;           ///< 上下文
@@ -100,23 +99,8 @@ public:
      * @param camera Camera实例指针
      *
      * 必须在Start()之前调用
-     * ImageIdCache 由 CameraService 内部管理
      */
     void Initialize(Camera* camera);
-
-    /**
-     * @brief 获取最新的 image_id
-     * @param context 上下文类型 ("active", "listening", "speaking")，空字符串表示获取任意
-     * @return 最新的 image_id，如果不存在则返回空字符串
-     */
-    std::string GetLatestImageId(const std::string& context = "");
-
-    /**
-     * @brief 获取最新的 ImageIdRecord
-     * @param context 上下文类型，空字符串表示获取任意
-     * @return 最新的 ImageIdRecord
-     */
-    ImageIdRecord GetLatestImageRecord(const std::string& context = "");
 
     /**
      * @brief 启动服务
@@ -179,35 +163,20 @@ private:
      * 2. 拍摄原始帧
      * 3. JPEG编码
      * 4. HTTP上传
-     * 5. 解析image_id
-     * 6. 缓存到ImageIdCache
      */
     TaskResult CaptureAndUploadTask(const TaskParams& params);
-
-    /**
-     * @brief HTTP上传到服务器
-     * @param data JPEG数据
-     * @param len 数据长度
-     * @param context 上下文类型
-     * @param out_image_id [out] 输出的image_id
-     * @return 是否成功
-     */
-    bool UploadToServer(const uint8_t* data, size_t len,
-                       const std::string& context,
-                       std::string& out_image_id);
 
     /**
      * @brief HTTP上传多帧到服务器
      * @param frames JPEG帧数组
      * @param frame_count 帧数量
      * @param context 上下文类型
-     * @param out_image_id [out] 输出的image_id
+     * @param device_state 设备状态
      * @return 是否成功
      */
     bool UploadMultipleFramesToServer(const JpegFrameBuffer* frames, size_t frame_count,
                                       const std::string& context,
-                                      const char* device_state,
-                                      std::string& out_image_id);
+                                      const char* device_state);
 
     // 主动模式任务
     void ActiveModeTask();
@@ -217,14 +186,8 @@ private:
     // 被动模式任务
     static void PassiveModeTaskWrapper(void* arg);
 
-    /**
-     * @brief 清理过期ID
-     */
-    void CleanupExpiredIds();
-
 private:
     Camera* camera_;                           ///< Camera实例
-    std::unique_ptr<ImageIdCache> cache_;      ///< ImageIdCache实例（内部管理）
     Config config_;                            ///< 配置
     Statistics stats_;                         ///< 统计信息
 

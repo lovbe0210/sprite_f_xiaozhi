@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <cstdio>
 #include <cstring>
 
@@ -141,8 +143,8 @@ bool JpegCircularBuffer::AddFrame(const uint8_t* data, size_t len) {
         return false;
     }
     if (len > MAX_JPEG_SIZE) {
-        ESP_LOGW(TAG, "JPEG frame too large: %u bytes (max %u)", (unsigned int)len, (unsigned int)MAX_JPEG_SIZE);
-        len = MAX_JPEG_SIZE;
+        ESP_LOGW(TAG, "JPEG frame too large: %u bytes (max %u), dropping frame", (unsigned int)len, (unsigned int)MAX_JPEG_SIZE);
+        return false;  // 拒绝添加过大的帧
     }
 
     // 复制数据到当前写入位置
@@ -1114,27 +1116,51 @@ bool Esp32Camera::CaptureRawFrame() {
                 frame_allocated_len_ = frame_.len + 4096;  // 多分配 4KB 作为余量
                 ESP_LOGI(TAG, "Attempting to allocate %d bytes", frame_allocated_len_);
 
-                // 分配内存
-                frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
-                    MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
+                // 尝试多次分配，每次失败后清理内存并重试
+                int retry_count = 0;
+                const int max_retries = 3;
 
-                if (frame_.data == nullptr) {
+                while (retry_count < max_retries && frame_.data == nullptr) {
+                    if (retry_count > 0) {
+                        ESP_LOGW(TAG, "Allocation failed, retry %d/%d... Cleaning heap and waiting",
+                                 retry_count + 1, max_retries);
+                        // 清理堆内存以减少碎片化
+                        heap_caps_malloc_extmem_enable(1024);
+                        // 等待一段时间让系统整理内存
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                    }
+
+                    // 分配内存，按优先级尝试不同的内存类型
                     frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
-                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                }
+                        MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
 
-                if (frame_.data == nullptr) {
-                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, MALLOC_CAP_DEFAULT);
+                    if (frame_.data == nullptr) {
+                        frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    }
+
+                    if (frame_.data == nullptr) {
+                        frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, MALLOC_CAP_DEFAULT);
+                    }
+
+                    retry_count++;
                 }
 
                 if (!frame_.data) {
-                    ESP_LOGE(TAG, "alloc frame buffer failed: need allocate %d bytes", frame_allocated_len_);
+                    ESP_LOGE(TAG, "alloc frame buffer failed after %d retries: need allocate %d bytes",
+                             max_retries, frame_allocated_len_);
+                    ESP_LOGE(TAG, "Free heap: %d, largest free block: %d",
+                             heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                             heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
                     frame_allocated_len_ = 0;
                     if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
                         ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
                     }
                     return false;
                 }
+
+                ESP_LOGI(TAG, "Successfully allocated %d bytes after %d retries",
+                         frame_allocated_len_, retry_count);
             }
             // 否则重用之前分配的内存（不释放）
 
@@ -1181,34 +1207,8 @@ bool Esp32Camera::CaptureRawFrame() {
             ESP_LOGE(TAG, "VIDIOC_QBUF failed at iteration %d for buffer index=%d, errno=%d", i, buf.index, errno);
         }
     }
-    // 将捕获的帧编码为 JPEG 并存入循环缓冲区
-    // 这样在需要上传时可以获取最近5帧的 JPEG 数据
-    std::vector<uint8_t> jpeg_buffer;
-    bool jpeg_ok = image_to_jpeg_cb(
-        frame_.data, frame_.len,
-        frame_.width, frame_.height,
-        (v4l2_pix_fmt_t)frame_.format, 85,  // quality 85
-        [](void* arg, size_t index, const void* data, size_t len) -> size_t {
-            auto* jpeg_vec = static_cast<std::vector<uint8_t>*>(arg);
-            if (data != nullptr && len > 0) {
-                if (index == 0) {
-                    jpeg_vec->reserve(len * 2);  // 预估JPEG大小
-                }
-                const uint8_t* byte_data = static_cast<const uint8_t*>(data);
-                jpeg_vec->insert(jpeg_vec->end(), byte_data, byte_data + len);
-            }
-            return len;
-        },
-        &jpeg_buffer
-    );
-
-    if (jpeg_ok && !jpeg_buffer.empty()) {
-        // 存入循环缓冲区（自动覆盖最旧的帧）
-        jpeg_circular_buffer_.AddFrame(jpeg_buffer.data(), jpeg_buffer.size());
-    } else {
-        ESP_LOGW(TAG, "Failed to encode JPEG for circular buffer");
-    }
-
+    // 注意：JPEG 编码已移至 camera_service.cc 中的 EncodeFrameToJpeg 函数处理
+    // 这里只保留原始帧数据，循环缓冲区的 JPEG 编码由 camera_service.cc 统一管理
     return true;
 }
 
