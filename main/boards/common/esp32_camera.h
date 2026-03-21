@@ -78,6 +78,7 @@ private:
     bool streaming_on_ = false;
     struct MmapBuffer { void *start = nullptr; size_t length = 0; };
     std::vector<MmapBuffer> mmap_buffers_;
+    int current_dma_buffer_index_ = -1;  // 当前使用的DMA缓冲区索引（用于QBUF）
     std::string explain_url_;
     std::string explain_token_;
     std::thread encoder_thread_;

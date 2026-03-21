@@ -541,21 +541,9 @@ bool Esp32Camera::Capture() {
                 // 分配内存（留一点余量以适应不同大小的帧）
                 frame_allocated_len_ = frame_.len + 4096;  // 多分配 4KB 作为余量
 
-                // 尝试多种方式分配内存
-                // 方式1：SPIRAM + DMA + 32BIT（推荐）
-                frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
-                    MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
-
-                // 方式2：SPIRAM + 8BIT（回退）
-                if (frame_.data == nullptr) {
-                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
-                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                }
-
-                // 方式3：任何可用的内存（最后的回退）
-                if (frame_.data == nullptr) {
-                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, MALLOC_CAP_DEFAULT);
-                }
+                // 分配内存
+                // 不指定任何能力标志，让系统自动从任何可用堆分配（包括PSRAM）
+                frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, 0);
 
                 if (!frame_.data) {
                     ESP_LOGE(TAG, "alloc frame copy failed: need allocate %d bytes (PSRAM may be fragmented)", frame_allocated_len_);
@@ -1001,8 +989,35 @@ FrameData Esp32Camera::GetFrameData() {
 }
 
 void Esp32Camera::ReleaseFrameData() {
-    // 不释放帧缓冲区内存，保留供下次拍照复用，这样可以避免内存碎片化
-    // 清空帧信息，但保留指针
+    // 检查 frame_.data 是否指向DMA缓冲区
+    bool is_dma_buffer = false;
+    for (const auto& buf : mmap_buffers_) {
+        if (frame_.data == (uint8_t*)buf.start) {
+            is_dma_buffer = true;
+            break;
+        }
+    }
+
+    // 如果是DMA缓冲区，需要QBUF放回驱动（JPEG编码已完成）
+    if (is_dma_buffer && current_dma_buffer_index_ >= 0) {
+        struct v4l2_buffer buf = {};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = current_dma_buffer_index_;
+        if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+            ESP_LOGE(TAG, "ReleaseFrameData: VIDIOC_QBUF failed for buffer index=%d", current_dma_buffer_index_);
+        }
+        current_dma_buffer_index_ = -1;
+    }
+
+    // 只有非DMA缓冲区才需要释放
+    if (!is_dma_buffer && frame_.data != nullptr) {
+        heap_caps_free(frame_.data);
+        frame_allocated_len_ = 0;
+    }
+
+    // 清空帧信息
+    frame_.data = nullptr;
     frame_.len = 0;
     frame_.width = 0;
     frame_.height = 0;
@@ -1089,6 +1104,16 @@ bool Esp32Camera::CaptureRawFrame() {
         streaming_on_ = true;
     }
 
+    // 每次拍照前丢弃第一帧，确保获得稳定的图像
+    struct v4l2_buffer discard_buf = {};
+    discard_buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    discard_buf.memory = V4L2_MEMORY_MMAP;
+    if (ioctl(video_fd_, VIDIOC_DQBUF, &discard_buf) == 0) {
+        if (ioctl(video_fd_, VIDIOC_QBUF, &discard_buf) != 0) {
+            ESP_LOGW(TAG, "Discard frame QBUF failed");
+        }
+    }
+
     for (int i = 0; i < 3; i++) {
         struct v4l2_buffer buf = {};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -1098,75 +1123,13 @@ bool Esp32Camera::CaptureRawFrame() {
             return false;
         }
         if (i == 2) {
-            // 保存帧副本到PSRAM
+            // 直接使用DMA缓冲区，不复制数据（节省600KB内存分配）
+            // JPEG编码是同步的，所以可以安全地直接使用DMA缓冲区
+            frame_.data = (uint8_t*)mmap_buffers_[buf.index].start;
             frame_.len = buf.bytesused;
-
-            // 预分配并复用帧缓冲区，避免每次拍照都分配/释放 614KB 内存
-            if (frame_.data == nullptr || frame_allocated_len_ < frame_.len) {
-                ESP_LOGI(TAG, "Need to allocate: frame_.data=%p, frame_allocated_len_=%d, frame_.len=%d",
-                         frame_.data, frame_allocated_len_, frame_.len);
-                // 需要分配或重新分配内存
-                if (frame_.data != nullptr) {
-                    ESP_LOGI(TAG, "Freeing old frame buffer");
-                    heap_caps_free(frame_.data);
-                    frame_.data = nullptr;
-                }
-
-                // 分配内存（留一点余量以适应不同大小的帧）
-                frame_allocated_len_ = frame_.len + 4096;  // 多分配 4KB 作为余量
-                ESP_LOGI(TAG, "Attempting to allocate %d bytes", frame_allocated_len_);
-
-                // 尝试多次分配，每次失败后清理内存并重试
-                int retry_count = 0;
-                const int max_retries = 3;
-
-                while (retry_count < max_retries && frame_.data == nullptr) {
-                    if (retry_count > 0) {
-                        ESP_LOGW(TAG, "Allocation failed, retry %d/%d... Cleaning heap and waiting",
-                                 retry_count + 1, max_retries);
-                        // 清理堆内存以减少碎片化
-                        heap_caps_malloc_extmem_enable(1024);
-                        // 等待一段时间让系统整理内存
-                        vTaskDelay(pdMS_TO_TICKS(100));
-                    }
-
-                    // 分配内存，按优先级尝试不同的内存类型
-                    frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
-                        MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_32BIT);
-
-                    if (frame_.data == nullptr) {
-                        frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_,
-                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                    }
-
-                    if (frame_.data == nullptr) {
-                        frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, MALLOC_CAP_DEFAULT);
-                    }
-
-                    retry_count++;
-                }
-
-                if (!frame_.data) {
-                    ESP_LOGE(TAG, "alloc frame buffer failed after %d retries: need allocate %d bytes",
-                             max_retries, frame_allocated_len_);
-                    ESP_LOGE(TAG, "Free heap: %d, largest free block: %d",
-                             heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                             heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-                    frame_allocated_len_ = 0;
-                    if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
-                        ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
-                    }
-                    return false;
-                }
-
-                ESP_LOGI(TAG, "Successfully allocated %d bytes after %d retries",
-                         frame_allocated_len_, retry_count);
-            }
-            // 否则重用之前分配的内存（不释放）
-
-            // 设置帧尺寸和格式（从保存的传感器尺寸获取）
             frame_.width = sensor_width_;
             frame_.height = sensor_height_;
+            current_dma_buffer_index_ = buf.index;  // 保存索引，用于ReleaseFrameData中的QBUF
 
             switch (sensor_format_) {
                 case V4L2_PIX_FMT_RGB565:
@@ -1174,18 +1137,32 @@ bool Esp32Camera::CaptureRawFrame() {
                 case V4L2_PIX_FMT_YUYV:
                 case V4L2_PIX_FMT_YUV420:
                 case V4L2_PIX_FMT_GREY:
-                    memcpy(frame_.data, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, frame_.len));
                     frame_.format = sensor_format_;
                     break;
                 case V4L2_PIX_FMT_YUV422P: {
                     // 这个格式是 422 YUYV，不是 planer
                     frame_.format = V4L2_PIX_FMT_YUYV;
-                    memcpy(frame_.data, mmap_buffers_[buf.index].start, MIN(mmap_buffers_[buf.index].length, frame_.len));
                     break;
                 }
                 case V4L2_PIX_FMT_RGB565X: {
                     // 大端序的 RGB565 需要转换为小端序
-                    // 目前 esp_video 的大小端都会返回格式为 RGB565，不会返回格式为 RGB565X，此 case 用于未来版本兼容
+                    // 这种格式需要转换，所以需要分配临时缓冲区
+                    size_t needed_size = (size_t)frame_.width * (size_t)frame_.height * 2;
+                    if (frame_.data == nullptr || frame_allocated_len_ < needed_size) {
+                        if (frame_.data != nullptr && frame_.data != (uint8_t*)mmap_buffers_[buf.index].start) {
+                            heap_caps_free(frame_.data);
+                        }
+                        frame_allocated_len_ = needed_size + 4096;
+                        frame_.data = (uint8_t*)heap_caps_malloc(frame_allocated_len_, 0);
+                        if (!frame_.data) {
+                            ESP_LOGE(TAG, "Failed to allocate conversion buffer");
+                            // 仍然需要QBUF
+                            if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                                ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+                            }
+                            return false;
+                        }
+                    }
                     auto src16 = (uint16_t*)mmap_buffers_[buf.index].start;
                     auto dst16 = (uint16_t*)frame_.data;
                     size_t pixel_count = (size_t)frame_.width * (size_t)frame_.height;
@@ -1197,14 +1174,18 @@ bool Esp32Camera::CaptureRawFrame() {
                 }
                 default:
                     ESP_LOGE(TAG, "unsupported sensor format: 0x%08x", sensor_format_);
+                    current_dma_buffer_index_ = -1;
                     if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
                         ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
                     }
                     return false;
             }
-        }
-        if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
-            ESP_LOGE(TAG, "VIDIOC_QBUF failed at iteration %d for buffer index=%d, errno=%d", i, buf.index, errno);
+            // 注意：不在这里调用QBUF，在ReleaseFrameData中调用
+        } else {
+            // 对于前两帧，直接QBUF放回
+            if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                ESP_LOGE(TAG, "VIDIOC_QBUF failed at iteration %d for buffer index=%d, errno=%d", i, buf.index, errno);
+            }
         }
     }
     // 注意：JPEG 编码已移至 camera_service.cc 中的 EncodeFrameToJpeg 函数处理

@@ -218,7 +218,7 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
         // 使用较低的质量以减少图片大小和内存占用
         g_jpeg_data_buffer.clear();
         bool encode_ok = EncodeFrameToJpeg(fd.data, fd.len, fd.width, fd.height,
-                                          (v4l2_pix_fmt_t)fd.format, 60,  // 降低质量到60以减少内存压力
+                                          (v4l2_pix_fmt_t)fd.format, 85,  // 质量85，平衡质量和大小
                                           g_jpeg_data_buffer);        camera_->ReleaseFrameData();
 
         if (encode_ok && !g_jpeg_data_buffer.empty()) {
@@ -461,13 +461,13 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
 
         if (interrupt != nullptr) {
             bool should_interrupt = cJSON_IsTrue(interrupt);
-            const char* reason_str = reason ? reason->valuestring : "unknown";
+            const char* reason_str = (reason && reason->valuestring) ? reason->valuestring : "unknown";
             double conf = confidence ? confidence->valuedouble : 0.0;
             ESP_LOGI(TAG, "Speaking mode: interrupt=%d, reason=%s, confidence=%.2f",
                      should_interrupt, reason_str, conf);
         } else if (activate != nullptr) {
             bool should_activate = cJSON_IsTrue(activate);
-            const char* reason_str = reason ? reason->valuestring : "unknown";
+            const char* reason_str = (reason && reason->valuestring) ? reason->valuestring : "unknown";
             double conf = confidence ? confidence->valuedouble : 0.0;
             ESP_LOGI(TAG, "Idle mode: activate=%d, reason=%s, confidence=%.2f",
                      should_activate, reason_str, conf);
