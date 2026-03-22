@@ -25,6 +25,7 @@
 #define MAIN_EVENT_ERROR (1 << 4)
 #define MAIN_EVENT_CHECK_NEW_VERSION_DONE (1 << 5)
 #define MAIN_EVENT_CLOCK_TICK (1 << 6)
+#define MAIN_EVENT_CAMERA_ACTIVATE (1 << 7)
 
 
 enum AecMode {
@@ -97,6 +98,7 @@ private:
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
+    void OnCameraActivate();
 };
 
 

@@ -361,11 +361,7 @@ Content-Type: image/jpeg
   "code": 200,
   "message": "操作成功",
   "data": {
-    "detection_result": {
-      "interrupt": "true",
-      "reason": "用户挥手",
-      "confidence": 0.95
-    }
+    "interrupt": "true"
   }
 }
 ```
@@ -377,11 +373,7 @@ Content-Type: image/jpeg
   "code": 200,
   "message": "操作成功",
   "data": {
-    "detection_result": {
-      "activate": true,
-      "reason": "检测到人脸",
-      "confidence": 0.92
-    }
+    "activate": true
   }
 }
 ```
@@ -399,11 +391,10 @@ Content-Type: image/jpeg
 **字段说明**：
 - `code`: 200表示成功
 - `message`: 状态描述
-- `data.detection_result`: 检测结果（speaking/idle模式）
+- `data`: 检测结果（speaking/idle模式）
   - `interrupt`: 是否打断当前说话状态（speaking模式）
   - `activate`: 是否激活设备（idle模式）
   - `reason`: 检测原因描述
-  - `confidence`: 检测置信度（0.0-1.0）
 
 ---
 

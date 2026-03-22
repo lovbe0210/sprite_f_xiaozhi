@@ -52,8 +52,10 @@ public:
         std::string error_message;     ///< 错误信息
         uint64_t timestamp_ms;         ///< 时间戳
         std::string context;           ///< 上下文
+        bool activate;                 ///< 激活检测结果
+        bool interrupt;                ///< 打断检测结果
 
-        TaskResult() : success(false), timestamp_ms(0) {}
+        TaskResult() : success(false), timestamp_ms(0), activate(false), interrupt(false) {}
     };
 
     /**
@@ -152,6 +154,12 @@ public:
      */
     Statistics GetStatistics() const;
 
+    /**
+     * @brief 设置激活回调（当服务器返回activate=true时调用）
+     * @param callback 回调函数
+     */
+    void SetActivateCallback(std::function<void()> callback);
+
 private:
     /**
      * @brief 核心任务执行（原子操作）
@@ -172,11 +180,13 @@ private:
      * @param frame_count 帧数量
      * @param context 上下文类型
      * @param device_state 设备状态
+     * @param result 任务结果（用于保存检测结果）
      * @return 是否成功
      */
     bool UploadMultipleFramesToServer(const JpegFrameBuffer* frames, size_t frame_count,
                                       const std::string& context,
-                                      const char* device_state);
+                                      const char* device_state,
+                                      TaskResult& result);
 
     // 主动模式任务
     void ActiveModeTask();
@@ -201,6 +211,9 @@ private:
 
     // 同步
     mutable std::mutex mutex_;
+
+    // 激活回调
+    std::function<void()> activate_callback_;
 };
 
 #endif  // _CAMERA_SERVICE_H_

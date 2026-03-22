@@ -193,11 +193,8 @@ Content-Type: image/jpeg
   "code": 200,
   "message": "操作成功",
   "data": {
-    "detection_result": {
-      "interrupt": "true",
-      "reason": null,
-      "confidence": 0.95
-    }
+    "interrupt": "true",
+    "reason": null
   }
 }
 ```
@@ -210,11 +207,8 @@ Content-Type: image/jpeg
   "code": 200,
   "message": "操作成功",
   "data": {
-    "detection_result": {
-      "activate": false,
-      "reason": null,
-      "confidence": 0.0
-    }
+    "activate": false,
+    "reason": null
   }
 }
 ```
@@ -226,19 +220,17 @@ Content-Type: image/jpeg
 {
   "code": 200,
   "message": "操作成功",
-  "data": {
-  }
+  "data": {}
 }
 ```
 
 **字段说明**：
 - `code`: 200表示成功
 - `message`: 状态描述
-- `data.detection_result`: 检测结果
+- `data`: 检测结果
   - `interrupt`: 是否打断当前设备说话状态，切换为listening状态
   - `activate`：是否激活设备，设备状态切换为listening状态
   - `reason`: 简短描述唤醒的原因
-  - `confidence`: 检测置信度（0.0-1.0）
 
 ### GET /api/camera/image/<image_id>
 

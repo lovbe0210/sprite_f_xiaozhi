@@ -109,33 +109,13 @@ void CameraService::OnDeviceStateChanged(DeviceState prev, DeviceState curr) {
         return;
     }
 
-    // 被动模式触发
+    // 被动模式触发（暂时禁用listening和speaking状态下的拍照，减少CPU和网络负担）
+    // 只保留idle状态下的主动模式拍照用于智能唤醒
     switch (curr) {
         case kDeviceStateListening:
-        case kDeviceStateSpeaking: {
-            // 创建一次性任务参数
-            struct TaskArg {
-                CameraService* service;
-                std::string context;
-            };
-
-            auto* arg = new TaskArg{this, curr == kDeviceStateListening ? "listening" : "speaking"};
-
-            BaseType_t ret = xTaskCreate(
-                PassiveModeTaskWrapper,
-                "camera_passive",
-                8192,
-                arg,
-                2,  // 优先级2，低于音频任务
-                nullptr
-            );
-
-            if (ret != pdPASS) {
-                ESP_LOGE(TAG, "Failed to create passive mode task");
-                delete arg;
-            }
+        case kDeviceStateSpeaking:
+            // 暂时不拍照，避免影响音频性能
             break;
-        }
 
         default:
             break;
@@ -169,6 +149,11 @@ CameraService::Config CameraService::GetConfig() const {
 CameraService::Statistics CameraService::GetStatistics() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return stats_;
+}
+
+void CameraService::SetActivateCallback(std::function<void()> callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    activate_callback_ = callback;
 }
 
 CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& params) {
@@ -245,7 +230,7 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
 
     // 4. HTTP上传多帧
     const char* device_state = STATE_STRINGS[current_state_];
-    if (!UploadMultipleFramesToServer(frames, actual_frame_count, params.context, device_state)) {
+    if (!UploadMultipleFramesToServer(frames, actual_frame_count, params.context, device_state, result)) {
         result.success = false;
         result.error_message = "Failed to upload to server";
         stats_.failed_captures++;
@@ -278,7 +263,8 @@ CameraService::TaskResult CameraService::CaptureAndUploadTask(const TaskParams& 
 
 bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, size_t frame_count,
                                                    const std::string& context,
-                                                   const char* device_state) {
+                                                   const char* device_state,
+                                                   TaskResult& result) {
     // 从Settings获取上传URL和token（与WebSocket使用相同的api_server配置）
     Settings settings("api_server", false);
     std::string upload_url = settings.GetString("url");
@@ -448,33 +434,22 @@ bool CameraService::UploadMultipleFramesToServer(const JpegFrameBuffer* frames, 
     }
 
     // 根据上下文处理不同的响应模式
-    // 1. speaking 语音打断检测模式: detection_result.interrupt
-    // 2. idle 唤醒检测模式: detection_result.activate
+    // 1. speaking 语音打断检测模式: data.interrupt
+    // 2. idle 唤醒检测模式: data.activate
     // 3. listening 设备聆听模式: 空 data 对象（服务器自动保存）
-    cJSON* detection_result = cJSON_GetObjectItem(data_obj, "detection_result");
-    if (detection_result != nullptr) {
-        // 解析检测结果
-        cJSON* interrupt = cJSON_GetObjectItem(detection_result, "interrupt");
-        cJSON* activate = cJSON_GetObjectItem(detection_result, "activate");
-        cJSON* reason = cJSON_GetObjectItem(detection_result, "reason");
-        cJSON* confidence = cJSON_GetObjectItem(detection_result, "confidence");
+    cJSON* interrupt = cJSON_GetObjectItem(data_obj, "interrupt");
+    cJSON* activate = cJSON_GetObjectItem(data_obj, "activate");
 
-        if (interrupt != nullptr) {
-            bool should_interrupt = cJSON_IsTrue(interrupt);
-            const char* reason_str = (reason && reason->valuestring) ? reason->valuestring : "unknown";
-            double conf = confidence ? confidence->valuedouble : 0.0;
-            ESP_LOGI(TAG, "Speaking mode: interrupt=%d, reason=%s, confidence=%.2f",
-                     should_interrupt, reason_str, conf);
-        } else if (activate != nullptr) {
-            bool should_activate = cJSON_IsTrue(activate);
-            const char* reason_str = (reason && reason->valuestring) ? reason->valuestring : "unknown";
-            double conf = confidence ? confidence->valuedouble : 0.0;
-            ESP_LOGI(TAG, "Idle mode: activate=%d, reason=%s, confidence=%.2f",
-                     should_activate, reason_str, conf);
+    if (interrupt != nullptr) {
+        result.interrupt = cJSON_IsTrue(interrupt);
+    }
+    if (activate != nullptr) {
+        result.activate = cJSON_IsTrue(activate);
+        // 当activate=true时，调用回调通知Application确保WebSocket连接正常
+        if (result.activate && activate_callback_) {
+            ESP_LOGI(TAG, "Device activated, notifying main loop");
+            activate_callback_();
         }
-
-        cJSON_Delete(root);
-        return true;  // 检测模式成功
     }
 
     cJSON_Delete(root);
@@ -507,7 +482,12 @@ void CameraService::ActiveModeTask() {
         auto result = ExecuteTask(params);
 
         if (result.success) {
-            ESP_LOGI(TAG, "Active mode: upload success");
+            if (result.activate) {
+                ESP_LOGI(TAG, "[idle] activate=true");
+            } else if (result.interrupt) {
+                const char* state_str = STATE_STRINGS[current_state_];
+                ESP_LOGI(TAG, "[%s] interrupt=true", state_str);
+            }
         } else {
             ESP_LOGW(TAG, "Active mode failed: %s", result.error_message.c_str());
         }

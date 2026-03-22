@@ -406,6 +406,12 @@ void Application::Start() {
             }
         );
 
+        // 注册激活回调：当服务器返回activate=true时，确保WebSocket连接正常
+        camera_service_->SetActivateCallback([this]() {
+            ESP_LOGI(TAG, "CameraService activate callback: notify main loop");
+            xEventGroupSetBits(event_group_, MAIN_EVENT_CAMERA_ACTIVATE);
+        });
+
         // 启动CameraService
         camera_service_->Start();
 
@@ -620,7 +626,8 @@ void Application::MainEventLoop() {
             MAIN_EVENT_WAKE_WORD_DETECTED |
             MAIN_EVENT_VAD_CHANGE |
             MAIN_EVENT_CLOCK_TICK |
-            MAIN_EVENT_ERROR, pdTRUE, pdFALSE, portMAX_DELAY);
+            MAIN_EVENT_ERROR |
+            MAIN_EVENT_CAMERA_ACTIVATE, pdTRUE, pdFALSE, portMAX_DELAY);
 
         if (bits & MAIN_EVENT_ERROR) {
             SetDeviceState(kDeviceStateIdle);
@@ -645,6 +652,10 @@ void Application::MainEventLoop() {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             }
+        }
+
+        if (bits & MAIN_EVENT_CAMERA_ACTIVATE) {
+            OnCameraActivate();
         }
 
         if (bits & MAIN_EVENT_SCHEDULE) {
@@ -732,6 +743,29 @@ void Application::AbortSpeaking(AbortReason reason) {
 void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
     SetDeviceState(kDeviceStateListening);
+}
+
+void Application::OnCameraActivate() {
+    ESP_LOGI(TAG, "Camera activate event: checking WebSocket connection");
+
+    if (!protocol_) {
+        ESP_LOGW(TAG, "Protocol not initialized");
+        return;
+    }
+
+    if (!protocol_->IsAudioChannelOpened()) {
+        ESP_LOGI(TAG, "WebSocket not connected, opening connection...");
+        if (!protocol_->OpenAudioChannel()) {
+            ESP_LOGE(TAG, "Failed to open WebSocket connection");
+            SetDeviceState(kDeviceStateFatalError);
+        } else {
+            SetDeviceState(kDeviceStateIdle);
+            ESP_LOGI(TAG, "WebSocket connection established, waiting for server TTS");
+            // 保持Connecting状态，等待服务端发送tts消息
+        }
+    } else {
+        ESP_LOGI(TAG, "WebSocket already connected");
+    }
 }
 
 void Application::SetDeviceState(DeviceState state) {

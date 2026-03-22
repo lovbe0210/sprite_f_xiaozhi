@@ -79,7 +79,7 @@ void WebsocketProtocol::CloseAudioChannel() {
     websocket_.reset();
 }
 
-bool WebsocketProtocol::OpenAudioChannel() {
+bool WebsocketProtocol::OpenAudioChannel() {`
     Settings settings("websocket", false);
     std::string url = settings.GetString("url");
     std::string token = settings.GetString("token");
@@ -234,7 +234,6 @@ void WebsocketProtocol::ParseServerHello(const cJSON* root) {
     auto session_id = cJSON_GetObjectItem(root, "session_id");
     if (cJSON_IsString(session_id)) {
         session_id_ = session_id->valuestring;
-        ESP_LOGI(TAG, "Session ID: %s", session_id_.c_str());
     }
 
     auto audio_params = cJSON_GetObjectItem(root, "audio_params");
